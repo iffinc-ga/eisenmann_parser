@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <title>Eisenmann Invoice PDF Parser</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:Arial, sans-serif;background:#f5f7fa;padding:20px}
+    .container{max-width:1800px;margin:0 auto;background:#fff;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.1)}
+    .header{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:#fff;padding:30px;border-radius:8px 8px 0 0}
+    .header h1{margin-bottom:8px}
+    .upload-section{padding:40px;text-align:center}
+    .upload-box{border:3px dashed #cbd5e0;border-radius:8px;padding:40px;cursor:pointer;transition:.3s}
+    .upload-box:hover{border-color:#667eea;background:#f7fafc}
+    .upload-box.dragover{border-color:#667eea;background:#e6f0ff}
+    #fileInput{display:none}
+    .loading{padding:40px;text-align:center;display:none}
+    .spinner{border:4px solid #f3f3f3;border-top:4px solid #667eea;border-radius:50%;width:50px;height:50px;animation:spin 1s linear infinite;margin:0 auto 20px}
+    @keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}
+    .controls{padding:20px;background:#f8f9fa;border-bottom:1px solid #dee2e6;display:none;position:sticky;top:0;z-index:100;align-items:center;gap:10px;flex-wrap:wrap}
+    .controls select{padding:10px;border:1px solid #ced4da;border-radius:4px;font-size:14px;min-width:260px}
+    .controls button{padding:10px 20px;border:none;border-radius:4px;font-weight:600;cursor:pointer}
+    .btn-success{background:#28a745;color:#fff}.btn-success:hover{background:#218838}
+    .btn-primary{background:#007bff;color:#fff}.btn-primary:hover{background:#0056b3}
+    .btn-danger{background:#dc3545;color:#fff}.btn-danger:hover{background:#c82333}
+    .btn-light{background:#f8f9fa;color:#212529;border:1px solid #ced4da}
+    .inline-help{font-size:12px;color:#6c757d;margin-left:8px}
+    .stats{padding:20px;display:none;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:15px;background:#fff3cd}
+    .stat{padding:15px;background:#fff;border-radius:4px;border-left:4px solid #ffc107}
+    .stat-label{font-size:11px;color:#6c757d;text-transform:uppercase;margin-bottom:5px}
+    .stat-value{font-size:20px;font-weight:700}
+    .stat-value.error{color:#dc3545}.stat-value.success{color:#28a745}
+    .stat input{width:100%;padding:6px;border:1px solid #ced4da;border-radius:3px;font-size:16px;font-weight:bold}
+    .stat.editable{border-left-color:#007bff}
+    .table-container{padding:20px;display:none}
+    .table-header-wrapper{background:#343a40;overflow:auto}
+    .table-header-wrapper::-webkit-scrollbar{display:none}
+    .table-header-wrapper{scrollbar-width:none}
+    .table-header{min-width:1100px}
+    .table-header table{width:100%;border-collapse:collapse}
+    .table-header th{background:#343a40;color:#fff;padding:8px;text-align:left;font-weight:600;font-size:13px;border:none}
+    .table-body-wrapper{max-height:560px;overflow:auto}
+    .table-body{min-width:1100px}
+    .table-body table{width:100%;border-collapse:collapse}
+    .table-body td{padding:6px 6px;border-bottom:1px solid #dee2e6;background:#fff}
+    .table-body tr:hover td{background:#f8f9fa}
+    .table-body td input{width:100%;padding:6px;border:1px solid #ced4da;border-radius:3px;font-size:13px}
+    .table-body td input:focus{outline:none;border-color:#667eea;box-shadow:0 0 0 2px rgba(102,126,234,.15)}
+    .readonly{background:#e9ecef!important}
+    .actions{text-align:center;white-space:nowrap}
+    .actions button{padding:4px 8px;font-size:11px;margin:0 2px}
+    .alert{margin:0 20px 20px;border-radius:4px;padding:10px 14px;font-size:13px;display:none}
+    @keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}
+    .table-header table,.table-body table{table-layout:fixed}
+    .table-header th:nth-child(1),.table-body td:nth-child(1){width:52px!important}
+    .table-header th:nth-child(2),.table-body td:nth-child(2){width:190px!important}
+    .table-header th:nth-child(3),.table-body td:nth-child(3){width:80px!important}
+    .table-header th:nth-child(4),.table-body td:nth-child(4){width:60px!important}
+    .table-header th:nth-child(5),.table-body td:nth-child(5){width:110px!important}
+    .table-header th:nth-child(6),.table-body td:nth-child(6){width:110px!important}
+    .table-header th:nth-child(7),.table-body td:nth-child(7){width:110px!important}
+    .table-header th:nth-child(8),.table-body td:nth-child(8){width:110px!important}
+    .table-header th:nth-child(9),.table-body td:nth-child(9){width:110px!important}
+  </style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>📄 Eisenmann Invoice PDF Parser</h1>
+    <p>Parse Eisenmann customs invoices into editable line items and export to Excel.</p>
+  </div>
+
+  <div class="upload-section" id="uploadSection">
+    <div class="upload-box" id="uploadBox">
+      <h2>📤 Upload Eisenmann PDF</h2>
+      <p style="margin-top:10px;color:#6c757d">Click or drag &amp; drop your multi-invoice PDF here</p>
+      <input type="file" id="fileInput" accept=".pdf,application/pdf" />
+    </div>
+  </div>
+
+  <div class="loading" id="loading">
+    <div class="spinner"></div>
+    <div><strong>Processing PDF...</strong></div>
+  </div>
+
+  <div class="alert" id="alert"></div>
+
+  <div class="controls" id="controls">
+    <select id="invoiceSelect"><option value="">Select an invoice...</option></select>
+    <button class="btn-success" onclick="exportToDescartes()">📊 Export (All Invoices) to Excel</button>
+    <button class="btn-primary" onclick="resetUpload()">📤 New Upload</button>
+    <span class="inline-help">Use Tab / Shift+Tab to move across cells. Edit invoice totals/dates at the top.</span>
+  </div>
+
+  <div class="stats" id="stats">
+    <div class="stat">
+      <div class="stat-label">Invoice Number</div>
+      <div class="stat-value" id="statInvoice">-</div>
+    </div>
+    <div class="stat editable">
+      <div class="stat-label">Invoice Date (Editable)</div>
+      <input autocomplete="off" type="text" id="statDate" placeholder="MM/DD/YYYY"
+             onchange="updateInvoiceField('invoice_date', this.value)">
+    </div>
+    <div class="stat editable">
+      <div class="stat-label">Supplier (Editable)</div>
+      <input autocomplete="off" type="text" id="statSupplier" placeholder="Supplier name"
+             onchange="updateInvoiceField('supplier', this.value)">
+    </div>
+    <div class="stat">
+      <div class="stat-label">Total Line Items</div>
+      <div class="stat-value" id="statItems">0</div>
+    </div>
+    <div class="stat editable">
+      <div class="stat-label">Invoice Total (Editable)</div>
+      <input autocomplete="off" type="number" step="0.01" id="statTotal" placeholder="0.00"
+             onchange="updateInvoiceTotal(this.value)">
+    </div>
+    <div class="stat">
+      <div class="stat-label">Line Items Sum</div>
+      <div class="stat-value" id="statSum">$0.00</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Difference</div>
+      <div class="stat-value" id="statDiff">$0.00</div>
+    </div>
+  </div>
+
+  <div class="table-container" id="tableContainer">
+    <div class="table-header-wrapper">
+      <div class="table-header">
+        <table>
+          <thead>
+          <tr>
+            <th>Pos</th>
+            <th>Material / Part #</th>
+            <th>Quantity</th>
+            <th>Unit</th>
+            <th>Unit Price</th>
+            <th>Line Total</th>
+            <th>Net Weight</th>
+            <th>Country</th>
+            <th>Actions</th>
+          </tr>
+          </thead>
+        </table>
+      </div>
+    </div>
+    <div class="table-body-wrapper">
+      <div class="table-body">
+        <table>
+          <tbody id="tableBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ========= PDF.JS CONFIG =========
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+  // ========= GLOBAL STATE =========
+  let allData = [];       // all line items for all invoices
+  let currentInvoice = '';
+  let invoiceOrder = [];
+  let uploadedPdfName = '';
+
+  const uploadBox   = document.getElementById('uploadBox');
+  const fileInput   = document.getElementById('fileInput');
+  const loadingPane = document.getElementById('loading');
+  const uploadSec   = document.getElementById('uploadSection');
+  const alertBox    = document.getElementById('alert');
+  const controls    = document.getElementById('controls');
+  const stats       = document.getElementById('stats');
+  const tableCont   = document.getElementById('tableContainer');
+  const invoiceSelect = document.getElementById('invoiceSelect');
+  const headerWrap  = document.querySelector('.table-header-wrapper');
+  const bodyWrap    = document.querySelector('.table-body-wrapper');
+
+  // Keep header/body scroll in sync
+  if (headerWrap && bodyWrap) {
+    let syncing = false;
+    bodyWrap.addEventListener('scroll', () => {
+      if (syncing) return;
+      syncing = true;
+      headerWrap.scrollLeft = bodyWrap.scrollLeft;
+      syncing = false;
+    });
+  }
+
+  // ========= UI HELPERS =========
+  function showAlert(msg, type='success') {
+    alertBox.textContent = msg;
+    alertBox.style.display = 'block';
+    if (type === 'error') {
+      alertBox.style.background = '#f8d7da';
+      alertBox.style.color = '#721c24';
+      alertBox.style.border = '1px solid #f5c6cb';
+    } else {
+      alertBox.style.background = '#d4edda';
+      alertBox.style.color = '#155724';
+      alertBox.style.border = '1px solid #c3e6cb';
+    }
+    setTimeout(() => { alertBox.style.display = 'none'; }, 4000);
+  }
+
+  function parseFloatSafe(v) {
+    if (v == null) return NaN;
+    const t = String(v).replace(/,/g, '').trim();
+    const n = parseFloat(t);
+    return isNaN(n) ? NaN : n;
+  }
+
+  // ========= FILE HANDLING =========
+  function isPdfFile(file) {
+    const nameOk = (file.name || '').toLowerCase().endsWith('.pdf');
+    const typeOk = (file.type || '').toLowerCase() === 'application/pdf';
+    return nameOk || typeOk;
+  }
+
+  uploadBox.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', e => {
+    const f = e.target.files && e.target.files[0];
+    if (f) handleFile(f);
+  });
+
+  uploadBox.addEventListener('dragover', e => {
+    e.preventDefault();
+    uploadBox.classList.add('dragover');
+  });
+  uploadBox.addEventListener('dragleave', () => uploadBox.classList.remove('dragover'));
+  uploadBox.addEventListener('drop', e => {
+    e.preventDefault();
+    uploadBox.classList.remove('dragover');
+    const f = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) handleFile(f);
+  });
+
+  async function handleFile(file) {
+    if (!isPdfFile(file)) {
+      showAlert('Please upload a PDF file.', 'error');
+      return;
+    }
+    uploadedPdfName = (file.name || '').replace(/\.pdf$/i, '');
+
+    uploadSec.style.display = 'none';
+    loadingPane.style.display = 'block';
+
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const uint8 = new Uint8Array(arrayBuffer);
+      const pdf = await pdfjsLib.getDocument({ data: uint8 }).promise;
+
+      let fullText = '';
+      for (let i = 1; i <= pdf.numPages; i++) {
+        try {
+          const page = await pdf.getPage(i);
+          const textContent = await page.getTextContent({ includeMarkedContent: true });
+          const items = (textContent && Array.isArray(textContent.items)) ? textContent.items : [];
+          const pageText = items
+            .map(it => (it && typeof it.str === 'string') ? it.str : '')
+            .join(' ');
+          fullText += pageText + '\n';
+        } catch (perPageErr) {
+          console.warn('Failed to read page', i, perPageErr);
+        }
+      }
+
+      if (!fullText.trim()) {
+        showAlert('The PDF had no extractable text (might be scanned).', 'error');
+        uploadSec.style.display = 'block';
+        return;
+      }
+
+      parseInvoices(fullText);
+
+      if (allData.length) {
+        const invoiceCount = new Set(allData.map(d => d.invoice_number)).size;
+        showAlert(`Parsed ${invoiceCount} invoice(s) and ${allData.length} line item(s).`, 'success');
+        setupInterface();
+      } else {
+        showAlert('No Eisenmann invoice lines were found in the PDF.', 'error');
+        uploadSec.style.display = 'block';
+      }
+    } catch (err) {
+      console.error('PDF processing error:', err);
+      showAlert('Error processing PDF: ' + (err.message || String(err)), 'error');
+      uploadSec.style.display = 'block';
+    } finally {
+      loadingPane.style.display = 'none';
+    }
+  }
+
+  // ========= CORE PARSER (EISENMANN) =========
+  function parseInvoices(text) {
+    allData = [];
+    invoiceOrder = [];
+    text = String(text || '');
+
+    // 1) Find each "Invoice no. / Date:" header
+    const invoicePattern = /Invoice no\. \/ Date:\s*(\d+)\s*\/\s*(\d{2}\/\d{2}\/\d{4})/g;
+    const headers = [];
+    let m;
+    while ((m = invoicePattern.exec(text)) !== null) {
+      headers.push({
+        index: m.index,
+        invoice_number: m[1],
+        invoice_date: m[2]
+      });
+    }
+    // Sentinel
+    headers.push({ index: text.length, invoice_number: null, invoice_date: null });
+
+    const linePattern = /(\d{5,6})\s+([A-Z0-9]+)\s+([\d.,]+)\s+([A-Z]+)\s+([\d.,]+)\s+USD\s+([\d.,]+)\s+([A-Z]+)\s+([\d.,]+)/g;
+
+    for (let i = 0; i < headers.length - 1; i++) {
+      const start = headers[i].index;
+      const end   = headers[i + 1].index;
+      const invNum  = headers[i].invoice_number;
+      const invDate = headers[i].invoice_date;
+
+      if (!invNum) continue; // skip sentinel
+      const block = text.slice(start, end);
+
+      // Invoice total: "Netamount 11,773.90"
+      let invoiceTotal = '';
+      const totalMatch = block.match(/Netamount\s+([\d.,]+)/);
+      if (totalMatch) invoiceTotal = totalMatch[1].replace(/,/g, '');
+
+      // Find lines in this invoice
+      const lineMatches = [...block.matchAll(linePattern)];
+      if (!lineMatches.length) {
+        // create an empty row so user can still see invoice header
+        allData.push({
+          invoice_number: invNum,
+          invoice_date: invDate,
+          invoice_total: invoiceTotal,
+          supplier: 'Eisenmann GmbH',
+          position: '',
+          part_number: '',
+          quantity: '',
+          unit: '',
+          unit_price: '',
+          line_total: '',
+          net_weight: '',
+          country_of_origin: '',
+          hts_code: ''
+        });
+        continue;
+      }
+
+      lineMatches.forEach((lm, idx) => {
+        const position = lm[1];
+        const material = lm[2];
+        const qty1     = (lm[3] || '').replace(/,/g, '');
+        const unit1    = lm[4];
+        const unitPrice = (lm[5] || '').replace(/,/g, '');
+        const rawTotal  = lm[8] || '';
+
+        const cleanTotal = rawTotal
+          .replace(/[^0-9.,]/g, '') // strip "Page" etc
+          .replace(/,/g, '');
+
+        // Look at text between this match and the next to get HTS and COO
+        const itemStart = lm.index || 0;
+        const itemEnd   = (idx + 1 < lineMatches.length)
+          ? (lineMatches[idx + 1].index || block.length)
+          : block.length;
+        const itemSection = block.slice(itemStart, itemEnd);
+
+        let hts = '';
+        const htsMatch = itemSection.match(/Commodity Code\s*\/\s*Import Code Number:\s*([0-9]+)/i);
+        if (htsMatch) hts = htsMatch[1];
+
+        let coo = '';
+        const cooMatch = itemSection.match(/Country of origin:\s*([A-Za-z ]+)/i);
+        if (cooMatch) coo = cooMatch[1].trim();
+        if (coo.toLowerCase().includes('germany')) coo = 'DE';
+
+        allData.push({
+          invoice_number: invNum,
+          invoice_date: invDate,
+          invoice_total: invoiceTotal,
+          supplier: 'Eisenmann GmbH',
+          position: position,
+          part_number: material,
+          quantity: qty1,
+          unit: unit1,
+          unit_price: unitPrice,
+          line_total: cleanTotal,
+          net_weight: '',
+          country_of_origin: coo,
+          hts_code: hts
+        });
+      });
+    }
+
+    invoiceOrder = [...new Set(allData.map(r => r.invoice_number))];
+  }
+
+  // ========= UI SETUP / RENDERING =========
+  function setupInterface() {
+    if (!invoiceOrder.length) return;
+
+    controls.style.display = 'flex';
+    stats.style.display = 'grid';
+    tableCont.style.display = 'block';
+
+    invoiceSelect.innerHTML = '<option value="">Select an invoice...</option>';
+    invoiceOrder.forEach(inv => {
+      const opt = document.createElement('option');
+      opt.value = inv;
+      opt.textContent = inv;
+      invoiceSelect.appendChild(opt);
+    });
+
+    currentInvoice = invoiceOrder[0];
+    invoiceSelect.value = currentInvoice;
+    loadInvoiceData();
+  }
+
+  invoiceSelect.addEventListener('change', e => {
+    currentInvoice = e.target.value;
+    loadInvoiceData();
+  });
+
+  function loadInvoiceData() {
+    const tbody = document.getElementById('tableBody');
+    tbody.innerHTML = '';
+
+    const rows = allData.filter(r => r.invoice_number === currentInvoice);
+    rows.forEach(row => {
+      const globalIdx = allData.indexOf(row);
+      const tr = document.createElement('tr');
+
+      function makeCell(field) {
+        const td = document.createElement('td');
+        const input = document.createElement('input');
+        input.value = row[field] == null ? '' : row[field];
+        input.dataset.index = String(globalIdx);
+        input.dataset.field = field;
+        input.addEventListener('input', onCellChange);
+        if (field === 'position') input.style.textAlign = 'right';
+        if (field === 'quantity' || field === 'unit_price' || field === 'line_total' || field === 'net_weight') {
+          input.style.textAlign = 'right';
+        }
+        td.appendChild(input);
+        return td;
+      }
+
+      tr.appendChild(makeCell('position'));
+      tr.appendChild(makeCell('part_number'));
+      tr.appendChild(makeCell('quantity'));
+      tr.appendChild(makeCell('unit'));
+      tr.appendChild(makeCell('unit_price'));
+      tr.appendChild(makeCell('line_total'));
+      tr.appendChild(makeCell('net_weight'));
+      tr.appendChild(makeCell('country_of_origin'));
+
+      const tdAct = document.createElement('td');
+      tdAct.className = 'actions';
+      const btnAdd = document.createElement('button');
+      btnAdd.textContent = '+ Below';
+      btnAdd.className = 'btn-light';
+      btnAdd.addEventListener('click', () => addRowBelow(globalIdx));
+      const btnDel = document.createElement('button');
+      btnDel.textContent = 'Delete';
+      btnDel.className = 'btn-danger';
+      btnDel.addEventListener('click', () => deleteRow(globalIdx));
+      tdAct.appendChild(btnAdd);
+      tdAct.appendChild(btnDel);
+      tr.appendChild(tdAct);
+
+      tbody.appendChild(tr);
+    });
+
+    updateStats();
+  }
+
+  function onCellChange(e) {
+    const idx = parseInt(e.target.dataset.index, 10);
+    const field = e.target.dataset.field;
+    if (Number.isNaN(idx) || !field) return;
+    allData[idx][field] = e.target.value;
+    updateStats();
+  }
+
+  function updateStats() {
+    const rows = allData.filter(r => r.invoice_number === currentInvoice);
+
+    const statInvoice  = document.getElementById('statInvoice');
+    const statDate     = document.getElementById('statDate');
+    const statSupplier = document.getElementById('statSupplier');
+    const statItems    = document.getElementById('statItems');
+    const statTotal    = document.getElementById('statTotal');
+    const statSum      = document.getElementById('statSum');
+    const statDiff     = document.getElementById('statDiff');
+
+    statInvoice.textContent = currentInvoice || '-';
+
+    if (rows.length) {
+      statDate.value     = rows[0].invoice_date || '';
+      statSupplier.value = rows[0].supplier || 'Eisenmann GmbH';
+      statItems.textContent = rows.length;
+      statTotal.value    = rows[0].invoice_total || '';
+    } else {
+      statDate.value = '';
+      statSupplier.value = '';
+      statItems.textContent = '0';
+      statTotal.value = '';
+    }
+
+    let sum = 0;
+    rows.forEach(r => {
+      const v = parseFloatSafe(r.line_total);
+      if (!isNaN(v)) sum += v;
+    });
+    statSum.textContent = '$' + sum.toFixed(2);
+
+    let diff = 0;
+    const invTotal = parseFloatSafe(rows[0]?.invoice_total || '');
+    if (!isNaN(invTotal)) diff = invTotal - sum;
+
+    statDiff.textContent = '$' + diff.toFixed(2);
+    statDiff.classList.remove('success','error');
+    if (!isNaN(invTotal)) {
+      if (Math.abs(diff) < 0.01) statDiff.classList.add('success');
+      else statDiff.classList.add('error');
+    }
+  }
+
+  function updateInvoiceField(field, value) {
+    allData.forEach(r => {
+      if (r.invoice_number === currentInvoice) {
+        r[field] = value;
+      }
+    });
+    updateStats();
+  }
+
+  function updateInvoiceTotal(value) {
+    updateInvoiceField('invoice_total', value);
+  }
+
+  function addRowBelow(globalIdx) {
+    const base = allData[globalIdx];
+    if (!base) return;
+    const newRow = {
+      invoice_number: base.invoice_number,
+      invoice_date: base.invoice_date,
+      invoice_total: base.invoice_total,
+      supplier: base.supplier,
+      position: '',
+      part_number: '',
+      quantity: '',
+      unit: '',
+      unit_price: '',
+      line_total: '',
+      net_weight: '',
+      country_of_origin: base.country_of_origin || '',
+      hts_code: base.hts_code || ''
+    };
+    allData.splice(globalIdx + 1, 0, newRow);
+    loadInvoiceData();
+  }
+
+  function deleteRow(globalIdx) {
+    if (globalIdx < 0 || globalIdx >= allData.length) return;
+    allData.splice(globalIdx, 1);
+    loadInvoiceData();
+  }
+
+  function resetUpload() {
+    allData = [];
+    invoiceOrder = [];
+    currentInvoice = '';
+    uploadedPdfName = '';
+    fileInput.value = '';
+    invoiceSelect.innerHTML = '<option value="">Select an invoice...</option>';
+    controls.style.display = 'none';
+    stats.style.display = 'none';
+    tableCont.style.display = 'none';
+    uploadSec.style.display = 'block';
+  }
+
+  // ========= EXPORT =========
+  function exportToDescartes() {
+    if (!allData.length) {
+      showAlert('No data to export.', 'error');
+      return;
+    }
+    const rows = allData.map(r => ({
+      InvoiceNumber: r.invoice_number,
+      InvoiceDate:   r.invoice_date,
+      InvoiceTotal:  r.invoice_total,
+      SupplierName:  r.supplier,
+      Position:      r.position,
+      PartNumber:    r.part_number,
+      Quantity:      r.quantity,
+      Unit:          r.unit,
+      UnitPrice:     r.unit_price,
+      LineTotal:     r.line_total,
+      CountryOfOrigin: r.country_of_origin,
+      HTSCode:       r.hts_code || ''
+    }));
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(rows);
+    XLSX.utils.book_append_sheet(wb, ws, 'Eisenmann');
+
+    const fname = (uploadedPdfName ? uploadedPdfName + '_' : '') + 'eisenmann_parsed.xlsx';
+    XLSX.writeFile(wb, fname);
+  }
+</script>
+</body>
+</html>
