@@ -217,7 +217,7 @@
     return isNaN(n) ? NaN : n;
   }
 
-  // more robust number parser (EU/US formats)
+  // robust EU/US number parsing
   function parseNum(s){
     if (s == null) return NaN;
     const t = String(s).trim();
@@ -229,20 +229,15 @@
       const lastComma = t.lastIndexOf(',');
       const decSep = (lastComma > lastDot) ? ',' : '.';
       if (decSep === ',') {
-        // 1.234,56 -> 1234.56
         return parseFloat(t.replace(/\./g,'').replace(',', '.'));
       } else {
-        // 1,234.56 -> 1234.56
         return parseFloat(t.replace(/,/g,''));
       }
     }
-
-    // 1234,56 style
+    // 1234,56
     if (/,\d{2}$/.test(t) && !/\.\d{2}$/.test(t)) {
       return parseFloat(t.replace(/\./g,'').replace(',', '.'));
     }
-
-    // default: just remove commas
     return parseFloat(t.replace(/,/g,''));
   }
 
@@ -367,8 +362,10 @@
     invoiceOrder = [];
     text = String(text || '');
 
-    // "Invoiceno./Date: 90019622/11/03/2025" or "Invoiceno./Datum:90019622/11/03/2025"
-    const invoicePattern = /Invoiceno\.\s*\/(?:Date|Datum):\s*(\d+)\s*\/\s*(\d{2}\/\d{2}\/\d{4})/g;
+    // Handles "Invoice no. / Date:" and "Invoice no. / Datum:"
+    const invoicePattern =
+      /Invoice\s*no\.\s*\/\s*(?:Date|Datum):\s*(\d+)\s*\/\s*(\d{2}\/\d{2}\/\d{4})/g;
+
     const headers = [];
     let m;
     let lastInv = null;
@@ -376,7 +373,7 @@
     while ((m = invoicePattern.exec(text)) !== null) {
       const invNum = m[1];
       const invDate = m[2];
-      // skip repeated header for same invoice (page 2/2)
+      // skip duplicate header on page 2 (same invoice)
       if (invNum === lastInv) continue;
       headers.push({
         index: m.index,
@@ -388,8 +385,8 @@
     // Sentinel
     headers.push({ index: text.length, invoice_number: null, invoice_date: null });
 
-    // Pattern for main line items:
-    // 000010 F000172334 3PC 140.64 USD 1 PC 421.91
+    // Example line:
+    // 000010 F000172334 3 PC 140.64 USD 1 PC 421.91
     const linePattern =
       /(\d{5,6})\s+([A-Z0-9]+)\s+(\d+)\s*(PC)?\s+([\d.,]+)\s+USD\s+(\d+)\s*(PC)?\s+([\d.,]+)/g;
 
@@ -402,14 +399,14 @@
       if (!invNum) continue;
       const block = text.slice(startIdx, endIdx);
 
-      // Invoice total: "Netamount 4,398.92"
+      // Invoice total: "Net amount 4,398.92"
       let invoiceTotal = '';
-      const totalMatch = block.match(/Netamount\s+([\d.,]+)/i);
+      const totalMatch = block.match(/Net\s*amount\s+([\d.,]+)/i);
       if (totalMatch) invoiceTotal = totalMatch[1];
 
-      // Invoice net weight: "NetWeight 78.000 KG"
+      // Invoice net weight: "Net Weight 78.000 KG"
       let invoiceNetWeight = '';
-      const netWMatch = block.match(/NetWeight\s+([\d.,]+)\s*KG/i);
+      const netWMatch = block.match(/Net\s*Weight\s+([\d.,]+)\s*KG/i);
       if (netWMatch) invoiceNetWeight = netWMatch[1];
 
       // Metal content totals: "Steel content 100%: 11,4 kg" etc.
@@ -430,14 +427,14 @@
         else if (kind === 'copper') copperTotalKg += val;
       }
 
-      const steelStr   = steelTotalKg   ? steelTotalKg.toFixed(3)   : '';
-      const aluminumStr= aluminumTotalKg? aluminumTotalKg.toFixed(3): '';
-      const copperStr  = copperTotalKg  ? copperTotalKg.toFixed(3)  : '';
+      const steelStr    = steelTotalKg   ? steelTotalKg.toFixed(3)    : '';
+      const aluminumStr = aluminumTotalKg? aluminumTotalKg.toFixed(3) : '';
+      const copperStr   = copperTotalKg  ? copperTotalKg.toFixed(3)   : '';
 
       const lineMatches = [...block.matchAll(linePattern)];
 
       if (!lineMatches.length) {
-        // Fallback row so invoice header still shows up
+        // Fallback row so invoice header still appears
         allData.push({
           invoice_number: invNum,
           invoice_date:   invDate,
@@ -467,17 +464,18 @@
         const priceEach  = lm[5]; // 140.64
         const lineTotal  = lm[8]; // 421.91
 
-        // Pull HTS and COO from the local block around this line
+        // Local slice to pick up HTS & COO
         const itemStart = lm.index || 0;
-        const itemEnd   = block.length; // no need for next index, lines are short
-        const itemSection = block.slice(itemStart, itemEnd);
+        const itemSection = block.slice(itemStart);
 
         let hts = '';
-        const htsMatch = itemSection.match(/CommodityCode\/ImportCodeNumber:\s*([0-9]+)/i);
+        const htsMatch =
+          itemSection.match(/Commodity\s*Code\s*\/\s*Import\s*Code\s*Number:\s*([0-9]+)/i);
         if (htsMatch) hts = htsMatch[1];
 
         let coo = '';
-        const cooMatch = itemSection.match(/Countryoforigin:\s*([A-Za-z]+)/i);
+        const cooMatch =
+          itemSection.match(/Country\s+of\s+origin:\s*([A-Za-z]+)/i);
         if (cooMatch) {
           coo = cooMatch[1].trim();
           if (coo.toLowerCase().startsWith('germany')) coo = 'DE';
@@ -799,7 +797,7 @@
       return;
     }
 
-    // Sort by invoice then position (numeric, then A/B suffix if used)
+    // Sort by invoice then position (numeric, then A/B suffix)
     const items = allData.slice().sort((a,b) => {
       const ai = String(a.invoice_number || '');
       const bi = String(b.invoice_number || '');
