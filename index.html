@@ -100,6 +100,7 @@
     <select id="invoiceSelect"><option value="">Select an invoice...</option></select>
     <button class="btn-success" onclick="exportToDescartes()">📊 Export (All Invoices) to Excel</button>
     <button class="btn-primary" onclick="resetUpload()">📤 New Upload</button>
+    <button class="btn-light" onclick="console.log('=== ALL DATA ===', allData)">🐛 Debug: Dump Data</button>
     <span class="inline-help">Use Tab / Shift+Tab to move across cells. Edit invoice totals/dates at the top.</span>
   </div>
 
@@ -641,11 +642,16 @@
         // Get metal content for this item (match by index)
         const metalContent = metalContents[idx] || { hasMetals: false, metals: [], noContent: false };
         
-        // Debug logging (remove in production)
-        if (idx < 3) {
-          console.log(`=== Item ${position} (index ${idx}) ===`);
-          console.log('Item section text:', itemSection.substring(0, 300));
-          console.log('Metal content found:', metalContent);
+        // Debug logging
+        console.log(`=== Item ${position} (index ${idx}) ===`);
+        console.log('Assigned metal content:', JSON.stringify(metalContent));
+        if (metalContent.hasMetals) {
+          console.log('  Has metals:', metalContent.metals.length);
+          metalContent.metals.forEach(m => {
+            console.log(`    ${m.type}: ${m.percentage}% ${m.weight}kg`);
+          });
+        } else if (metalContent.noContent) {
+          console.log('  No metal content');
         }
 
         allData.push({
@@ -698,20 +704,27 @@
 
   // Helper to render metal content for table cell
   function renderMetalContent(metalContent) {
+    console.log('renderMetalContent called with:', metalContent);
+    
     if (!metalContent) {
+      console.log('  -> returning dash (no metalContent)');
       return '<span style="color:#999;font-size:11px;">-</span>';
     }
 
     if (metalContent.noContent) {
+      console.log('  -> returning no content badge');
       return '<span class="metal-badge metal-none">No Al/Steel/Cu</span>';
     }
 
     if (!metalContent.hasMetals || !metalContent.metals || metalContent.metals.length === 0) {
+      console.log('  -> returning dash (no metals)');
       return '<span style="color:#999;font-size:11px;">-</span>';
     }
 
+    console.log('  -> rendering', metalContent.metals.length, 'metals');
     let html = '';
     metalContent.metals.forEach(metal => {
+      console.log('    Rendering metal:', metal.type, metal.percentage, metal.weight);
       const badgeClass = metal.type === 'Steel' ? 'metal-steel' : 
                         metal.type === 'Copper' ? 'metal-copper' : 
                         'metal-aluminum';
@@ -732,6 +745,7 @@
       html += '</div>';
     });
 
+    console.log('  -> returning HTML:', html.substring(0, 100));
     return html;
   }
 
@@ -739,8 +753,20 @@
     const tbody = document.getElementById('tableBody');
     tbody.innerHTML = '';
 
+    console.log('===== loadInvoiceData called for invoice:', currentInvoice, '=====');
     const rows = allData.filter(r => r.invoice_number === currentInvoice);
-    rows.forEach(row => {
+    console.log('Found', rows.length, 'rows for this invoice');
+    
+    rows.forEach((row, rowIdx) => {
+      console.log(`Row ${rowIdx}: position=${row.position}, has metal_content:`, !!row.metal_content);
+      if (row.metal_content) {
+        console.log('  metal_content details:', {
+          hasMetals: row.metal_content.hasMetals,
+          noContent: row.metal_content.noContent,
+          metalsCount: row.metal_content.metals?.length || 0
+        });
+      }
+      
       const globalIdx = allData.indexOf(row);
       const tr = document.createElement('tr');
 
@@ -771,6 +797,7 @@
       // Add metal content cell (non-editable display)
       const tdMetal = document.createElement('td');
       tdMetal.className = 'metal-info';
+      console.log(`Rendering metal content for row ${row.position}:`, row.metal_content);
       tdMetal.innerHTML = renderMetalContent(row.metal_content);
       tr.appendChild(tdMetal);
 
