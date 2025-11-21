@@ -53,7 +53,6 @@
     .actions{text-align:center;white-space:nowrap}
     .actions button{padding:4px 8px;font-size:11px;margin:0 2px}
     .alert{margin:0 20px 20px;border-radius:4px;padding:10px 14px;font-size:13px;display:none}
-    @keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}
     .table-header table,.table-body table{table-layout:fixed}
     .table-header th:nth-child(1),.table-body td:nth-child(1){width:52px!important}
     .table-header th:nth-child(2),.table-body td:nth-child(2){width:190px!important}
@@ -70,7 +69,7 @@
 <div class="container">
   <div class="header">
     <h1>📄 Eisenmann Invoice PDF Parser</h1>
-    <p>Parse Eisenmann customs invoices into editable line items and export to Excel.</p>
+    <p>Parse Eisenmann customs invoices into editable line items and export to Descartes template.</p>
   </div>
 
   <div class="upload-section" id="uploadSection">
@@ -90,7 +89,7 @@
 
   <div class="controls" id="controls">
     <select id="invoiceSelect"><option value="">Select an invoice...</option></select>
-    <button class="btn-success" onclick="exportToDescartes()">📊 Export (All Invoices) to Excel</button>
+    <button class="btn-success" onclick="exportToDescartes()">📊 Export (All Invoices) to Descartes Excel</button>
     <button class="btn-primary" onclick="resetUpload()">📤 New Upload</button>
     <span class="inline-help">Use Tab / Shift+Tab to move across cells. Edit invoice totals/dates at the top.</span>
   </div>
@@ -192,6 +191,42 @@
       syncing = false;
     });
   }
+
+  // ========= NUMERIC HELPERS & EXPORT UTILITIES =========
+  function parseNum(s){
+    if (s == null) return NaN;
+    const t = String(s).trim();
+    if (!t) return NaN;
+    // e.g. 1.234,56 or 1,234.56
+    if (/\d+[.,]\d{3}[.,]\d{2}$/.test(t)) {
+      const last = t.lastIndexOf('.') > t.lastIndexOf(',') ? '.' : ',';
+      const intPart = t.slice(0, t.lastIndexOf(last)).replace(/[.,\s]/g,'');
+      const dec = t.slice(t.lastIndexOf(last) + 1);
+      return parseFloat(intPart + '.' + dec);
+    }
+    // 1.234 or 1.234,56 style
+    if (/[,]\d{2}$/.test(t) && !/[.]\d{2}$/.test(t)) {
+      return parseFloat(t.replace(/[.]/g,'').replace(',', '.'));
+    }
+    return parseFloat(t.replace(/,/g,''));
+  }
+
+  function computeExportUnitPrice(item){
+    const q = parseNum(item.quantity);
+    const t = parseNum(item.line_total);
+    if (isFinite(q) && q > 0 && isFinite(t)) {
+      return (t / q).toFixed(6);
+    }
+    return '';
+  }
+
+  const roundWeight = (val) => {
+    const num = parseNum(val);
+    if (isNaN(num)) return '';
+    if (num < 1 && num > 0) return 1;
+    if (num <= 0) return '';
+    return Math.round(num);
+  };
 
   // ========= UI HELPERS =========
   function showAlert(msg, type='success') {
@@ -313,10 +348,12 @@
         invoice_date: m[2]
       });
     }
-    // Sentinel
+    // Sentinel to simplify range handling
     headers.push({ index: text.length, invoice_number: null, invoice_date: null });
 
-    const linePattern = /(\d{5,6})\s+([A-Z0-9]+)\s+([\d.,]+)\s+([A-Z]+)\s+([\d.,]+)\s+USD\s+([\d.,]+)\s+([A-Z]+)\s+([\d.,]+)/g;
+    // Pattern for main line items
+    const linePattern =
+      /(\d{5,6})\s+([A-Z0-9]+)\s+([\d.,]+)\s+([A-Z]+)\s+([\d.,]+)\s+USD\s+([\d.,]+)\s+([A-Z]+)\s+([\d.,]+)/g;
 
     for (let i = 0; i < headers.length - 1; i++) {
       const start = headers[i].index;
@@ -324,7 +361,7 @@
       const invNum  = headers[i].invoice_number;
       const invDate = headers[i].invoice_date;
 
-      if (!invNum) continue; // skip sentinel
+      if (!invNum) continue;
       const block = text.slice(start, end);
 
       // Invoice total: "Netamount 11,773.90"
@@ -332,10 +369,28 @@
       const totalMatch = block.match(/Netamount\s+([\d.,]+)/);
       if (totalMatch) invoiceTotal = totalMatch[1].replace(/,/g, '');
 
-      // Find lines in this invoice
+      // --- Metal content totals per invoice (Steel / Aluminum / Copper) ---
+      let steelTotalKg = 0;
+      let aluminumTotalKg = 0;
+      let copperTotalKg = 0;
+
+      const metalRegex =
+        /(Steel|Aluminum|Copper)\s+content\s*100%:\s*([\d.,]+)\s*kg/gi;
+      let mm;
+      while ((mm = metalRegex.exec(block)) !== null) {
+        const kind = (mm[1] || '').toLowerCase();
+        let raw = String(mm[2] || '').trim();
+        raw = raw.replace(/[.]/g, '').replace(',', '.');
+        const val = parseFloat(raw);
+        if (!isNaN(val)) {
+          if (kind === 'steel') steelTotalKg += val;
+          else if (kind === 'aluminum') aluminumTotalKg += val;
+          else if (kind === 'copper') copperTotalKg += val;
+        }
+      }
+
       const lineMatches = [...block.matchAll(linePattern)];
       if (!lineMatches.length) {
-        // create an empty row so user can still see invoice header
         allData.push({
           invoice_number: invNum,
           invoice_date: invDate,
@@ -349,24 +404,26 @@
           line_total: '',
           net_weight: '',
           country_of_origin: '',
-          hts_code: ''
+          hts_code: '',
+          steel_kg:   steelTotalKg ? steelTotalKg.toFixed(3) : '',
+          aluminum_kg: aluminumTotalKg ? aluminumTotalKg.toFixed(3) : '',
+          copper_kg:  copperTotalKg ? copperTotalKg.toFixed(3) : ''
         });
         continue;
       }
 
       lineMatches.forEach((lm, idx) => {
-        const position = lm[1];
-        const material = lm[2];
-        const qty1     = (lm[3] || '').replace(/,/g, '');
-        const unit1    = lm[4];
+        const position  = lm[1];
+        const material  = lm[2];
+        const qty1      = (lm[3] || '').replace(/,/g, '');
+        const unit1     = lm[4];
         const unitPrice = (lm[5] || '').replace(/,/g, '');
         const rawTotal  = lm[8] || '';
 
         const cleanTotal = rawTotal
-          .replace(/[^0-9.,]/g, '') // strip "Page" etc
+          .replace(/[^0-9.,]/g, '')
           .replace(/,/g, '');
 
-        // Look at text between this match and the next to get HTS and COO
         const itemStart = lm.index || 0;
         const itemEnd   = (idx + 1 < lineMatches.length)
           ? (lineMatches[idx + 1].index || block.length)
@@ -395,7 +452,10 @@
           line_total: cleanTotal,
           net_weight: '',
           country_of_origin: coo,
-          hts_code: hts
+          hts_code: hts,
+          steel_kg:   steelTotalKg ? steelTotalKg.toFixed(3) : '',
+          aluminum_kg: aluminumTotalKg ? aluminumTotalKg.toFixed(3) : '',
+          copper_kg:  copperTotalKg ? copperTotalKg.toFixed(3) : ''
         });
       });
     }
@@ -563,7 +623,10 @@
       line_total: '',
       net_weight: '',
       country_of_origin: base.country_of_origin || '',
-      hts_code: base.hts_code || ''
+      hts_code: base.hts_code || '',
+      steel_kg: base.steel_kg || '',
+      aluminum_kg: base.aluminum_kg || '',
+      copper_kg: base.copper_kg || ''
     };
     allData.splice(globalIdx + 1, 0, newRow);
     loadInvoiceData();
@@ -588,32 +651,127 @@
     uploadSec.style.display = 'block';
   }
 
-  // ========= EXPORT =========
+  // ========= EXPORT TO DESCARTES TEMPLATE =========
+  function buildDescartesRow(item) {
+    const row = {
+      'InvoiceNumber': item.invoice_number || "",
+      'InvoiceDate': item.invoice_date || "",
+      'InvoiceTotal': item.invoice_total || "",
+      'SupplierMID': "",
+      'SupplierName': item.supplier || "",
+      'BuyerPartNumber': item.part_number || "",
+      'SupplierPartNumber': item.part_number || "",
+      'Quantity': item.quantity || "",
+      'UnitOfMeasure': item.unit || "",
+      'Description': "",
+      'UnitPrice': "",
+      'ItemTotal': item.line_total || "",
+      'CurrencyCode': "USD",
+      'ExchangeRate': "",
+      'CountryOfOrigin': item.country_of_origin || "",
+      'CountryOfExport': "",
+      'DateOfExport': "",
+      'PortOfLading': "",
+      'RelatedParty': "",
+      'PO_Number': "",
+      'PO_Date': "",
+      'GrossWeight': "",
+      'GrossWeightUnit': "",
+      'NetWeight': item.net_weight || "",
+      'TariffNumber': item.hts_code || "",
+      'TariffDescription': "",
+      'Quantity1': "",
+      'UnitOfMeasure1': "",
+      'Quantity2': "",
+      'UnitOfMeasure2': "",
+      'Quantity3': "",
+      'UnitOfMeasure3': "",
+      'PrimarySPI': "",
+      'SecondarySPI': "",
+      'DeliverTo': "",
+      'SoldTo': "",
+      'SellerMID': "",
+      'ShipperMID': "",
+      'EntryDate': "",
+      'ArrivalDate': "",
+      'Carrier': "",
+      'Vessel': "",
+      'Voyage': "",
+      'PortOfEntry': "",
+      'PortOfUnloading': "",
+      'LocationCode': "",
+      'TotalCharges': "",
+      'BillOfLadingNumber': "",
+      'Container': "",
+      'SecondaryTariffNumber': "",
+      'SecondaryTariffdescription': "",
+      'Secondary Quantity1': "",
+      'Secondaryunitofmeasure1': "",
+      'secondaryquantity2': "",
+      'secondaryunitofmeasure2': "",
+      'secondaryquantity3': "",
+      'secondaryunitofmeasure3': "",
+      'secondaryvalue': "",
+      'FTZStatus': "",
+      'FTZPrivilegedDate\\u00a0': "",
+      'ThirdTariffNumber': "",
+      'ThirdTariffDescription': "",
+      'ThirdTariffQuantity1': "",
+      'ThirdTariffUnitofMeasure1': "",
+      'ThirdTariffQuantity2': "",
+      'ThirdTariffUnitofMeasure2': "",
+      'ThirdTariffQuantity3': "",
+      'ThirdTariffUnitofMeasure3': "",
+      'Third Value': "",
+      '4TariffNumber': "",
+      '4TariffDescription': "",
+      '4TariffQuantity1': "",
+      '4TariffUnitofMeasure1': "",
+      '4TariffQuantity2': "",
+      '4TariffUnitofMeasure2': "",
+      '4TariffQuantity3': "",
+      '4TariffUnitofMeasure3': "",
+      '4 Value': "",
+      '5TariffNumber': "",
+      '5TariffDescription': "",
+      '5TariffQuantity1': "",
+      '5TariffUnitofMeasure1': "",
+      '5TariffQuantity2': "",
+      '5TariffUnitofMeasure2': "",
+      '5TariffQuantity3': "",
+      '5TariffUnitofMeasure3': "",
+      '5 Value': "",
+    };
+    row['UnitPrice'] = computeExportUnitPrice({quantity: item.quantity, line_total: item.line_total});
+    return row;
+  }
+
   function exportToDescartes() {
     if (!allData.length) {
       showAlert('No data to export.', 'error');
       return;
     }
-    const rows = allData.map(r => ({
-      InvoiceNumber: r.invoice_number,
-      InvoiceDate:   r.invoice_date,
-      InvoiceTotal:  r.invoice_total,
-      SupplierName:  r.supplier,
-      Position:      r.position,
-      PartNumber:    r.part_number,
-      Quantity:      r.quantity,
-      Unit:          r.unit,
-      UnitPrice:     r.unit_price,
-      LineTotal:     r.line_total,
-      CountryOfOrigin: r.country_of_origin,
-      HTSCode:       r.hts_code || ''
-    }));
+
+    // Sort by invoice then position
+    const items = allData.slice().sort((a, b) => {
+      const ai = String(a.invoice_number || '');
+      const bi = String(b.invoice_number || '');
+      if (ai !== bi) return ai.localeCompare(bi);
+      const A = (String(a.position || '').match(/^(\d+)([A-Z]?)$/) || []);
+      const B = (String(b.position || '').match(/^(\d+)([A-Z]?)$/) || []);
+      const an = parseInt(A[1] || 999999, 10);
+      const bn = parseInt(B[1] || 999999, 10);
+      if (an !== bn) return an - bn;
+      return (A[2] || '').localeCompare(B[2] || '');
+    });
+
+    const rows = items.map(it => buildDescartesRow(it));
 
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.json_to_sheet(rows);
-    XLSX.utils.book_append_sheet(wb, ws, 'Eisenmann');
+    XLSX.utils.book_append_sheet(wb, ws, 'Descartes');
 
-    const fname = (uploadedPdfName ? uploadedPdfName + '_' : '') + 'eisenmann_parsed.xlsx';
+    const fname = (uploadedPdfName ? uploadedPdfName + '_' : '') + 'eisenmann_descartes.xlsx';
     XLSX.writeFile(wb, fname);
   }
 </script>
