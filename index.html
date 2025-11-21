@@ -39,16 +39,17 @@
     .table-header-wrapper{background:#343a40;overflow:auto}
     .table-header-wrapper::-webkit-scrollbar{display:none}
     .table-header-wrapper{scrollbar-width:none}
-    .table-header{min-width:1350px}
+    .table-header{min-width:1532px}
     .table-header table{width:100%;border-collapse:collapse}
     .table-header th{background:#343a40;color:#fff;padding:8px;text-align:left;font-weight:600;font-size:13px;border:none}
     .table-body-wrapper{max-height:560px;overflow:auto}
-    .table-body{min-width:1350px}
+    .table-body{min-width:1532px}
     .table-body table{width:100%;border-collapse:collapse}
     .table-body td{padding:6px 6px;border-bottom:1px solid #dee2e6;background:#fff}
     .table-body tr:hover td{background:#f8f9fa}
     .table-body td input{width:100%;padding:6px;border:1px solid #ced4da;border-radius:3px;font-size:13px}
-    .table-body td input:focus{outline:none;border-color:#667eea;box-shadow:0 0 0 2px rgba(102,126,234,.15)}
+    .table-body td select{width:100%;padding:6px;border:1px solid #ced4da;border-radius:3px;font-size:13px;background:#fff}
+    .table-body td input:focus,.table-body td select:focus{outline:none;border-color:#667eea;box-shadow:0 0 0 2px rgba(102,126,234,.15)}
     .readonly{background:#e9ecef!important}
     .actions{text-align:center;white-space:nowrap}
     .actions button{padding:4px 8px;font-size:11px;margin:0 2px}
@@ -63,8 +64,11 @@
     .table-header th:nth-child(6),.table-body td:nth-child(6){width:110px!important}
     .table-header th:nth-child(7),.table-body td:nth-child(7){width:110px!important}
     .table-header th:nth-child(8),.table-body td:nth-child(8){width:110px!important}
-    .table-header th:nth-child(9),.table-body td:nth-child(9){width:250px!important}
-    .table-header th:nth-child(10),.table-body td:nth-child(10){width:110px!important}
+    .table-header th:nth-child(9),.table-body td:nth-child(9){width:100px!important}
+    .table-header th:nth-child(10),.table-body td:nth-child(10){width:80px!important}
+    .table-header th:nth-child(11),.table-body td:nth-child(11){width:100px!important}
+    .table-header th:nth-child(12),.table-body td:nth-child(12){width:120px!important}
+    .table-header th:nth-child(13),.table-body td:nth-child(13){width:110px!important}
     .metal-badge{display:inline-block;padding:2px 6px;margin:2px;border-radius:3px;font-size:11px;font-weight:600}
     .metal-steel{background:#c0c0c0;color:#333}
     .metal-copper{background:#b87333;color:#fff}
@@ -152,7 +156,10 @@
             <th>Line Total</th>
             <th>Net Weight</th>
             <th>Country</th>
-            <th>Metal Content</th>
+            <th>Metal Type</th>
+            <th title="Metal percentage (typically 100)">Metal %</th>
+            <th>Metal Wt (kg)</th>
+            <th>Melt Country</th>
             <th>Actions</th>
           </tr>
           </thead>
@@ -672,6 +679,10 @@
           net_weight: '',
           country_of_origin: '',
           hts_code: '',
+          metal_type: '',
+          metal_percentage: '',
+          metal_weight: '',
+          metal_country: '',
           metal_content: { hasMetals: false, metals: [], noContent: false }
         });
         continue;
@@ -721,6 +732,23 @@
         // Get metal content for this item (match by index)
         const metalContent = metalContents[idx] || { hasMetals: false, metals: [], noContent: false };
         
+        // Extract metal content into separate fields for easier editing
+        let metalType = '';
+        let metalPercentage = '';
+        let metalWeight = '';
+        let metalCountry = '';
+        
+        if (metalContent.noContent) {
+          metalType = 'None';
+        } else if (metalContent.hasMetals && metalContent.metals.length > 0) {
+          // Take the first metal (most common case)
+          const metal = metalContent.metals[0];
+          metalType = metal.type;
+          metalPercentage = metal.percentage;
+          metalWeight = metal.weight;
+          metalCountry = metal.countryMeltPour || '';
+        }
+        
         // Calculate net weight from metal content if applicable
         let netWeight = '';
         if (metalContent.hasMetals && metalContent.metals.length > 0) {
@@ -758,6 +786,10 @@
           net_weight: netWeight,
           country_of_origin: coo,
           hts_code: hts,
+          metal_type: metalType,
+          metal_percentage: metalPercentage,
+          metal_weight: metalWeight,
+          metal_country: metalCountry,
           metal_content: metalContent
         });
       });
@@ -868,7 +900,8 @@
         input.dataset.field = field;
         input.addEventListener('input', onCellChange);
         if (field === 'position') input.style.textAlign = 'right';
-        if (field === 'quantity' || field === 'unit_price' || field === 'line_total' || field === 'net_weight') {
+        if (field === 'quantity' || field === 'unit_price' || field === 'line_total' || field === 'net_weight' || 
+            field === 'metal_percentage' || field === 'metal_weight') {
           input.style.textAlign = 'right';
         }
         td.appendChild(input);
@@ -884,12 +917,38 @@
       tr.appendChild(makeCell('net_weight'));
       tr.appendChild(makeCell('country_of_origin'));
 
-      // Add metal content cell (non-editable display)
-      const tdMetal = document.createElement('td');
-      tdMetal.className = 'metal-info';
-      console.log(`Rendering metal content for row ${row.position}:`, row.metal_content);
-      tdMetal.innerHTML = renderMetalContent(row.metal_content);
-      tr.appendChild(tdMetal);
+      // Add metal content fields as editable cells
+      // Metal Type - dropdown
+      const tdMetalType = document.createElement('td');
+      const selectMetalType = document.createElement('select');
+      selectMetalType.style.width = '100%';
+      selectMetalType.style.padding = '6px';
+      selectMetalType.style.border = '1px solid #ced4da';
+      selectMetalType.style.borderRadius = '3px';
+      selectMetalType.style.fontSize = '13px';
+      selectMetalType.dataset.index = String(globalIdx);
+      selectMetalType.dataset.field = 'metal_type';
+      selectMetalType.addEventListener('change', onCellChange);
+      
+      const metalOptions = ['', 'Steel', 'Copper', 'Aluminum', 'None'];
+      metalOptions.forEach(opt => {
+        const option = document.createElement('option');
+        option.value = opt;
+        option.textContent = opt;
+        if (opt === row.metal_type) option.selected = true;
+        selectMetalType.appendChild(option);
+      });
+      tdMetalType.appendChild(selectMetalType);
+      tr.appendChild(tdMetalType);
+
+      // Metal Percentage
+      tr.appendChild(makeCell('metal_percentage'));
+      
+      // Metal Weight
+      tr.appendChild(makeCell('metal_weight'));
+      
+      // Metal Country
+      tr.appendChild(makeCell('metal_country'));
 
       const tdAct = document.createElement('td');
       tdAct.className = 'actions';
@@ -993,6 +1052,10 @@
       net_weight: '',
       country_of_origin: base.country_of_origin || '',
       hts_code: base.hts_code || '',
+      metal_type: '',
+      metal_percentage: '',
+      metal_weight: '',
+      metal_country: '',
       metal_content: { hasMetals: false, metals: [], noContent: false }
     };
     allData.splice(globalIdx + 1, 0, newRow);
@@ -1046,57 +1109,25 @@
       return;
     }
     
-    const rows = [];
-    allData.forEach(r => {
-      const baseRow = {
-        InvoiceNumber: r.invoice_number,
-        InvoiceDate:   r.invoice_date,
-        InvoiceTotal:  r.invoice_total,
-        SupplierName:  r.supplier,
-        Position:      r.position,
-        PartNumber:    r.part_number,
-        Quantity:      r.quantity,
-        Unit:          r.unit,
-        UnitPrice:     r.unit_price,
-        LineTotal:     r.line_total,
-        CountryOfOrigin: r.country_of_origin,
-        HTSCode:       r.hts_code || ''
-      };
-
-      // Add metal content columns
-      if (r.metal_content && r.metal_content.noContent) {
-        rows.push({
-          ...baseRow,
-          MetalType: 'None',
-          MetalPercentage: '',
-          MetalWeight: '',
-          MetalUnit: '',
-          CountryMeltPour: ''
-        });
-      } else if (r.metal_content && r.metal_content.hasMetals && r.metal_content.metals.length > 0) {
-        // Create a row for each metal type
-        r.metal_content.metals.forEach(metal => {
-          rows.push({
-            ...baseRow,
-            MetalType: metal.type,
-            MetalPercentage: metal.percentage,
-            MetalWeight: metal.weight,
-            MetalUnit: metal.unit,
-            CountryMeltPour: metal.countryMeltPour || ''
-          });
-        });
-      } else {
-        // No metal content info
-        rows.push({
-          ...baseRow,
-          MetalType: '',
-          MetalPercentage: '',
-          MetalWeight: '',
-          MetalUnit: '',
-          CountryMeltPour: ''
-        });
-      }
-    });
+    const rows = allData.map(r => ({
+      InvoiceNumber: r.invoice_number,
+      InvoiceDate:   r.invoice_date,
+      InvoiceTotal:  r.invoice_total,
+      SupplierName:  r.supplier,
+      Position:      r.position,
+      PartNumber:    r.part_number,
+      Quantity:      r.quantity,
+      Unit:          r.unit,
+      UnitPrice:     r.unit_price,
+      LineTotal:     r.line_total,
+      NetWeight:     r.net_weight,
+      CountryOfOrigin: r.country_of_origin,
+      HTSCode:       r.hts_code || '',
+      MetalType:     r.metal_type || '',
+      MetalPercentage: r.metal_percentage || '',
+      MetalWeight:   r.metal_weight || '',
+      CountryMeltPour: r.metal_country || ''
+    }));
 
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.json_to_sheet(rows);
