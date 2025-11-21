@@ -225,6 +225,127 @@
     return isNaN(n) ? NaN : n;
   }
 
+  // Helper to extract all metal content declarations from an invoice block
+  // Returns an array of metal content objects in the order they appear
+  function extractAllMetalContent(text) {
+    const metalDeclarations = [];
+    
+    // Find all "Does not contain" declarations
+    const noContentPattern = /Does\s+not\s+contain\s+any\s+aluminum[,\s]+Steel\s+or\s+Copper/gi;
+    const noContentMatches = [...text.matchAll(noContentPattern)];
+    
+    // Find all metal content declarations with their positions
+    const steelPattern = /Steel\s*content\s*(\d+)\s*%\s*:\s*([\d,\.]+)\s*kg/gi;
+    const copperPattern = /Copper\s*content\s*(\d+)\s*%\s*:\s*([\d,\.]+)\s*kg/gi;
+    const aluminumPattern = /Aluminum\s*content\s*(\d+)\s*%\s*:\s*([\d,\.]+)\s*kg/gi;
+    
+    const steelMatches = [...text.matchAll(steelPattern)];
+    const copperMatches = [...text.matchAll(copperPattern)];
+    const aluminumMatches = [...text.matchAll(aluminumPattern)];
+    
+    // Collect all declarations with their positions
+    const allDeclarations = [];
+    
+    noContentMatches.forEach(m => {
+      allDeclarations.push({
+        position: m.index,
+        type: 'none',
+        match: m
+      });
+    });
+    
+    steelMatches.forEach(m => {
+      allDeclarations.push({
+        position: m.index,
+        type: 'steel',
+        match: m
+      });
+    });
+    
+    copperMatches.forEach(m => {
+      allDeclarations.push({
+        position: m.index,
+        type: 'copper',
+        match: m
+      });
+    });
+    
+    aluminumMatches.forEach(m => {
+      allDeclarations.push({
+        position: m.index,
+        type: 'aluminum',
+        match: m
+      });
+    });
+    
+    // Sort by position in text
+    allDeclarations.sort((a, b) => a.position - b.position);
+    
+    // Group declarations by proximity (declarations within 200 chars are for same item)
+    let currentGroup = null;
+    const groups = [];
+    
+    allDeclarations.forEach(decl => {
+      if (!currentGroup || (decl.position - currentGroup.lastPosition) > 200) {
+        // Start new group
+        currentGroup = {
+          metals: [],
+          noContent: false,
+          lastPosition: decl.position
+        };
+        groups.push(currentGroup);
+      }
+      
+      currentGroup.lastPosition = decl.position;
+      
+      if (decl.type === 'none') {
+        currentGroup.noContent = true;
+      } else {
+        const percentage = parseInt(decl.match[1]);
+        const weight = parseFloat(decl.match[2].replace(',', '.'));
+        
+        // Get the context around this declaration to find mixture and country info
+        const contextStart = Math.max(0, decl.position - 50);
+        const contextEnd = Math.min(text.length, decl.position + 300);
+        const context = text.slice(contextStart, contextEnd);
+        
+        const metal = {
+          type: decl.type.charAt(0).toUpperCase() + decl.type.slice(1),
+          percentage: percentage,
+          weight: weight,
+          unit: 'kg',
+          mixture: !context.includes('No mixture'),
+          countryMeltPour: extractCountryMeltPour(context)
+        };
+        
+        currentGroup.metals.push(metal);
+      }
+    });
+    
+    // Convert groups to metal content objects
+    return groups.map(group => {
+      if (group.noContent) {
+        return {
+          hasMetals: false,
+          metals: [],
+          noContent: true
+        };
+      } else if (group.metals.length > 0) {
+        return {
+          hasMetals: true,
+          metals: group.metals,
+          noContent: false
+        };
+      } else {
+        return {
+          hasMetals: false,
+          metals: [],
+          noContent: false
+        };
+      }
+    });
+  }
+
   // Helper to parse metal content from text section
   function parseMetalContent(text) {
     const metalContent = {
@@ -453,6 +574,19 @@
         continue;
       }
 
+      // Extract all metal content declarations from the entire block
+      const metalContents = extractAllMetalContent(block);
+      
+      // Debug: log the metal contents found
+      console.log(`Invoice ${invNum}: Found ${metalContents.length} metal content declarations for ${lineMatches.length} line items`);
+      metalContents.forEach((mc, i) => {
+        if (mc.hasMetals) {
+          console.log(`  Declaration ${i}:`, mc.metals.map(m => `${m.type} ${m.percentage}% ${m.weight}kg`).join(', '));
+        } else if (mc.noContent) {
+          console.log(`  Declaration ${i}: No metals`);
+        }
+      });
+
       lineMatches.forEach((lm, idx) => {
         const position = lm[1];
         const material = lm[2];
@@ -481,13 +615,13 @@
         if (cooMatch) coo = cooMatch[1].trim();
         if (coo.toLowerCase().includes('germany')) coo = 'DE';
 
-        // Parse metal content
-        const metalContent = parseMetalContent(itemSection);
+        // Get metal content for this item (match by index)
+        const metalContent = metalContents[idx] || { hasMetals: false, metals: [], noContent: false };
         
         // Debug logging (remove in production)
-        if (position === '000010' || position === '000011') {
-          console.log(`=== Item ${position} ===`);
-          console.log('Item section text:', itemSection.substring(0, 500));
+        if (idx < 3) {
+          console.log(`=== Item ${position} (index ${idx}) ===`);
+          console.log('Item section text:', itemSection.substring(0, 300));
           console.log('Metal content found:', metalContent);
         }
 
