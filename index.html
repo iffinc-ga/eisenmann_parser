@@ -90,6 +90,7 @@
   <div class="controls" id="controls">
     <select id="invoiceSelect"><option value="">Select an invoice...</option></select>
     <button class="btn-success" onclick="exportToDescartes()">📊 Export (All Invoices) to Descartes Excel</button>
+    <button class="btn-light" onclick="undoLast()">↩️ Undo last change</button>
     <button class="btn-primary" onclick="resetUpload()">📤 New Upload</button>
     <span class="inline-help">Use Tab / Shift+Tab to move across cells. Edit invoice totals/dates at the top.</span>
   </div>
@@ -140,7 +141,7 @@
             <th>Unit</th>
             <th>Unit Price</th>
             <th>Line Total</th>
-            <th>Net Weight</th>
+            <th>Net Weight (per line)</th>
             <th>Country</th>
             <th>Actions</th>
           </tr>
@@ -168,6 +169,7 @@
   let currentInvoice = '';
   let invoiceOrder = [];
   let uploadedPdfName = '';
+  let undoStack = [];
 
   const uploadBox   = document.getElementById('uploadBox');
   const fileInput   = document.getElementById('fileInput');
@@ -192,43 +194,7 @@
     });
   }
 
-  // ========= NUMERIC HELPERS & EXPORT UTILITIES =========
-  function parseNum(s){
-    if (s == null) return NaN;
-    const t = String(s).trim();
-    if (!t) return NaN;
-    // e.g. 1.234,56 or 1,234.56
-    if (/\d+[.,]\d{3}[.,]\d{2}$/.test(t)) {
-      const last = t.lastIndexOf('.') > t.lastIndexOf(',') ? '.' : ',';
-      const intPart = t.slice(0, t.lastIndexOf(last)).replace(/[.,\s]/g,'');
-      const dec = t.slice(t.lastIndexOf(last) + 1);
-      return parseFloat(intPart + '.' + dec);
-    }
-    // 1.234 or 1.234,56 style
-    if (/[,]\d{2}$/.test(t) && !/[.]\d{2}$/.test(t)) {
-      return parseFloat(t.replace(/[.]/g,'').replace(',', '.'));
-    }
-    return parseFloat(t.replace(/,/g,''));
-  }
-
-  function computeExportUnitPrice(item){
-    const q = parseNum(item.quantity);
-    const t = parseNum(item.line_total);
-    if (isFinite(q) && q > 0 && isFinite(t)) {
-      return (t / q).toFixed(6);
-    }
-    return '';
-  }
-
-  const roundWeight = (val) => {
-    const num = parseNum(val);
-    if (isNaN(num)) return '';
-    if (num < 1 && num > 0) return 1;
-    if (num <= 0) return '';
-    return Math.round(num);
-  };
-
-  // ========= UI HELPERS =========
+  // ========= HELPERS =========
   function showAlert(msg, type='success') {
     alertBox.textContent = msg;
     alertBox.style.display = 'block';
@@ -249,6 +215,69 @@
     const t = String(v).replace(/,/g, '').trim();
     const n = parseFloat(t);
     return isNaN(n) ? NaN : n;
+  }
+
+  // more robust number parser (EU/US formats)
+  function parseNum(s){
+    if (s == null) return NaN;
+    const t = String(s).trim();
+    if (!t) return NaN;
+
+    // 1.234,56 or 1,234.56
+    if (/\d+[.,]\d{3}[.,]\d{2}$/.test(t)) {
+      const lastDot = t.lastIndexOf('.');
+      const lastComma = t.lastIndexOf(',');
+      const decSep = (lastComma > lastDot) ? ',' : '.';
+      if (decSep === ',') {
+        // 1.234,56 -> 1234.56
+        return parseFloat(t.replace(/\./g,'').replace(',', '.'));
+      } else {
+        // 1,234.56 -> 1234.56
+        return parseFloat(t.replace(/,/g,''));
+      }
+    }
+
+    // 1234,56 style
+    if (/,\d{2}$/.test(t) && !/\.\d{2}$/.test(t)) {
+      return parseFloat(t.replace(/\./g,'').replace(',', '.'));
+    }
+
+    // default: just remove commas
+    return parseFloat(t.replace(/,/g,''));
+  }
+
+  function computeExportUnitPrice(item){
+    const q = parseNum(item.quantity);
+    const t = parseNum(item.line_total);
+    if (isFinite(q) && q > 0 && isFinite(t)) {
+      return (t / q).toFixed(6);
+    }
+    return '';
+  }
+
+  // ========= UNDO =========
+  function pushUndo() {
+    undoStack.push(JSON.parse(JSON.stringify(allData)));
+    if (undoStack.length > 50) undoStack.shift();
+  }
+
+  function undoLast() {
+    if (!undoStack.length) {
+      showAlert('Nothing to undo', 'error');
+      return;
+    }
+    allData = undoStack.pop() || [];
+    invoiceOrder = [...new Set(allData.map(r => r.invoice_number))];
+    if (!invoiceOrder.length) {
+      tableCont.style.display = 'none';
+      stats.style.display = 'none';
+      return;
+    }
+    if (!currentInvoice || !invoiceOrder.includes(currentInvoice)) {
+      currentInvoice = invoiceOrder[0] || '';
+    }
+    loadInvoiceData();
+    showAlert('Last change undone.', 'success');
   }
 
   // ========= FILE HANDLING =========
@@ -282,6 +311,7 @@
       return;
     }
     uploadedPdfName = (file.name || '').replace(/\.pdf$/i, '');
+    undoStack = [];
 
     uploadSec.style.display = 'none';
     loadingPane.style.display = 'block';
@@ -337,39 +367,52 @@
     invoiceOrder = [];
     text = String(text || '');
 
-    // 1) Find each "Invoice no. / Date:" header
-    const invoicePattern = /Invoice no\. \/ Date:\s*(\d+)\s*\/\s*(\d{2}\/\d{2}\/\d{4})/g;
+    // "Invoiceno./Date: 90019622/11/03/2025" or "Invoiceno./Datum:90019622/11/03/2025"
+    const invoicePattern = /Invoiceno\.\s*\/(?:Date|Datum):\s*(\d+)\s*\/\s*(\d{2}\/\d{2}\/\d{4})/g;
     const headers = [];
     let m;
+    let lastInv = null;
+
     while ((m = invoicePattern.exec(text)) !== null) {
+      const invNum = m[1];
+      const invDate = m[2];
+      // skip repeated header for same invoice (page 2/2)
+      if (invNum === lastInv) continue;
       headers.push({
         index: m.index,
-        invoice_number: m[1],
-        invoice_date: m[2]
+        invoice_number: invNum,
+        invoice_date: invDate
       });
+      lastInv = invNum;
     }
-    // Sentinel to simplify range handling
+    // Sentinel
     headers.push({ index: text.length, invoice_number: null, invoice_date: null });
 
-    // Pattern for main line items
+    // Pattern for main line items:
+    // 000010 F000172334 3PC 140.64 USD 1 PC 421.91
     const linePattern =
-      /(\d{5,6})\s+([A-Z0-9]+)\s+([\d.,]+)\s+([A-Z]+)\s+([\d.,]+)\s+USD\s+([\d.,]+)\s+([A-Z]+)\s+([\d.,]+)/g;
+      /(\d{5,6})\s+([A-Z0-9]+)\s+(\d+)\s*(PC)?\s+([\d.,]+)\s+USD\s+(\d+)\s*(PC)?\s+([\d.,]+)/g;
 
     for (let i = 0; i < headers.length - 1; i++) {
-      const start = headers[i].index;
-      const end   = headers[i + 1].index;
-      const invNum  = headers[i].invoice_number;
-      const invDate = headers[i].invoice_date;
+      const startIdx = headers[i].index;
+      const endIdx   = headers[i + 1].index;
+      const invNum   = headers[i].invoice_number;
+      const invDate  = headers[i].invoice_date;
 
       if (!invNum) continue;
-      const block = text.slice(start, end);
+      const block = text.slice(startIdx, endIdx);
 
-      // Invoice total: "Netamount 11,773.90"
+      // Invoice total: "Netamount 4,398.92"
       let invoiceTotal = '';
-      const totalMatch = block.match(/Netamount\s+([\d.,]+)/);
-      if (totalMatch) invoiceTotal = totalMatch[1].replace(/,/g, '');
+      const totalMatch = block.match(/Netamount\s+([\d.,]+)/i);
+      if (totalMatch) invoiceTotal = totalMatch[1];
 
-      // --- Metal content totals per invoice (Steel / Aluminum / Copper) ---
+      // Invoice net weight: "NetWeight 78.000 KG"
+      let invoiceNetWeight = '';
+      const netWMatch = block.match(/NetWeight\s+([\d.,]+)\s*KG/i);
+      if (netWMatch) invoiceNetWeight = netWMatch[1];
+
+      // Metal content totals: "Steel content 100%: 11,4 kg" etc.
       let steelTotalKg = 0;
       let aluminumTotalKg = 0;
       let copperTotalKg = 0;
@@ -379,83 +422,84 @@
       let mm;
       while ((mm = metalRegex.exec(block)) !== null) {
         const kind = (mm[1] || '').toLowerCase();
-        let raw = String(mm[2] || '').trim();
-        raw = raw.replace(/[.]/g, '').replace(',', '.');
-        const val = parseFloat(raw);
-        if (!isNaN(val)) {
-          if (kind === 'steel') steelTotalKg += val;
-          else if (kind === 'aluminum') aluminumTotalKg += val;
-          else if (kind === 'copper') copperTotalKg += val;
-        }
+        const raw  = mm[2] || '';
+        const val  = parseNum(raw);
+        if (!isFinite(val)) continue;
+        if (kind === 'steel') steelTotalKg += val;
+        else if (kind === 'aluminum') aluminumTotalKg += val;
+        else if (kind === 'copper') copperTotalKg += val;
       }
 
+      const steelStr   = steelTotalKg   ? steelTotalKg.toFixed(3)   : '';
+      const aluminumStr= aluminumTotalKg? aluminumTotalKg.toFixed(3): '';
+      const copperStr  = copperTotalKg  ? copperTotalKg.toFixed(3)  : '';
+
       const lineMatches = [...block.matchAll(linePattern)];
+
       if (!lineMatches.length) {
+        // Fallback row so invoice header still shows up
         allData.push({
           invoice_number: invNum,
-          invoice_date: invDate,
-          invoice_total: invoiceTotal,
-          supplier: 'Eisenmann GmbH',
+          invoice_date:   invDate,
+          invoice_total:  invoiceTotal,
+          supplier:       'Eisenmann GmbH',
           position: '',
           part_number: '',
           quantity: '',
-          unit: '',
+          unit: 'PC',
           unit_price: '',
           line_total: '',
-          net_weight: '',
+          net_weight: invoiceNetWeight || '',
           country_of_origin: '',
           hts_code: '',
-          steel_kg:   steelTotalKg ? steelTotalKg.toFixed(3) : '',
-          aluminum_kg: aluminumTotalKg ? aluminumTotalKg.toFixed(3) : '',
-          copper_kg:  copperTotalKg ? copperTotalKg.toFixed(3) : ''
+          steel_kg:   steelStr,
+          aluminum_kg: aluminumStr,
+          copper_kg:  copperStr
         });
         continue;
       }
 
-      lineMatches.forEach((lm, idx) => {
-        const position  = lm[1];
-        const material  = lm[2];
-        const qty1      = (lm[3] || '').replace(/,/g, '');
-        const unit1     = lm[4];
-        const unitPrice = (lm[5] || '').replace(/,/g, '');
-        const rawTotal  = lm[8] || '';
+      lineMatches.forEach(lm => {
+        const position   = lm[1]; // 000010
+        const material   = lm[2]; // F000172334
+        const qty        = lm[3]; // 3
+        const unit1      = lm[4] || 'PC';
+        const priceEach  = lm[5]; // 140.64
+        const lineTotal  = lm[8]; // 421.91
 
-        const cleanTotal = rawTotal
-          .replace(/[^0-9.,]/g, '')
-          .replace(/,/g, '');
-
+        // Pull HTS and COO from the local block around this line
         const itemStart = lm.index || 0;
-        const itemEnd   = (idx + 1 < lineMatches.length)
-          ? (lineMatches[idx + 1].index || block.length)
-          : block.length;
+        const itemEnd   = block.length; // no need for next index, lines are short
         const itemSection = block.slice(itemStart, itemEnd);
 
         let hts = '';
-        const htsMatch = itemSection.match(/Commodity Code\s*\/\s*Import Code Number:\s*([0-9]+)/i);
+        const htsMatch = itemSection.match(/CommodityCode\/ImportCodeNumber:\s*([0-9]+)/i);
         if (htsMatch) hts = htsMatch[1];
 
         let coo = '';
-        const cooMatch = itemSection.match(/Country of origin:\s*([A-Za-z ]+)/i);
-        if (cooMatch) coo = cooMatch[1].trim();
-        if (coo.toLowerCase().includes('germany')) coo = 'DE';
+        const cooMatch = itemSection.match(/Countryoforigin:\s*([A-Za-z]+)/i);
+        if (cooMatch) {
+          coo = cooMatch[1].trim();
+          if (coo.toLowerCase().startsWith('germany')) coo = 'DE';
+        }
 
         allData.push({
           invoice_number: invNum,
-          invoice_date: invDate,
-          invoice_total: invoiceTotal,
-          supplier: 'Eisenmann GmbH',
-          position: position,
-          part_number: material,
-          quantity: qty1,
-          unit: unit1,
-          unit_price: unitPrice,
-          line_total: cleanTotal,
-          net_weight: '',
+          invoice_date:   invDate,
+          invoice_total:  invoiceTotal,
+          supplier:       'Eisenmann GmbH',
+          position:       position,
+          part_number:    material,
+          quantity:       qty,
+          unit:           unit1,
+          unit_price:     priceEach,
+          line_total:     lineTotal,
+          net_weight:     invoiceNetWeight || '',
           country_of_origin: coo,
-          hts_code: hts,
-          steel_kg:   steelTotalKg ? steelTotalKg.toFixed(3) : '',
-          aluminum_kg: aluminumTotalKg ? aluminumTotalKg.toFixed(3) : '',
-          copper_kg:  copperTotalKg ? copperTotalKg.toFixed(3) : ''
+          hts_code:       hts,
+          steel_kg:       steelStr,
+          aluminum_kg:    aluminumStr,
+          copper_kg:      copperStr
         });
       });
     }
@@ -527,11 +571,11 @@
       const btnAdd = document.createElement('button');
       btnAdd.textContent = '+ Below';
       btnAdd.className = 'btn-light';
-      btnAdd.addEventListener('click', () => addRowBelow(globalIdx));
+      btnAdd.addEventListener('click', () => { pushUndo(); addRowBelow(globalIdx); });
       const btnDel = document.createElement('button');
       btnDel.textContent = 'Delete';
       btnDel.className = 'btn-danger';
-      btnDel.addEventListener('click', () => deleteRow(globalIdx));
+      btnDel.addEventListener('click', () => { pushUndo(); deleteRow(globalIdx); });
       tdAct.appendChild(btnAdd);
       tdAct.appendChild(btnDel);
       tr.appendChild(tdAct);
@@ -546,6 +590,7 @@
     const idx = parseInt(e.target.dataset.index, 10);
     const field = e.target.dataset.field;
     if (Number.isNaN(idx) || !field) return;
+    pushUndo();
     allData[idx][field] = e.target.value;
     updateStats();
   }
@@ -595,6 +640,7 @@
   }
 
   function updateInvoiceField(field, value) {
+    pushUndo();
     allData.forEach(r => {
       if (r.invoice_number === currentInvoice) {
         r[field] = value;
@@ -612,16 +658,16 @@
     if (!base) return;
     const newRow = {
       invoice_number: base.invoice_number,
-      invoice_date: base.invoice_date,
-      invoice_total: base.invoice_total,
-      supplier: base.supplier,
+      invoice_date:   base.invoice_date,
+      invoice_total:  base.invoice_total,
+      supplier:       base.supplier,
       position: '',
       part_number: '',
       quantity: '',
-      unit: '',
+      unit: base.unit || 'PC',
       unit_price: '',
       line_total: '',
-      net_weight: '',
+      net_weight: base.net_weight || '',
       country_of_origin: base.country_of_origin || '',
       hts_code: base.hts_code || '',
       steel_kg: base.steel_kg || '',
@@ -643,6 +689,7 @@
     invoiceOrder = [];
     currentInvoice = '';
     uploadedPdfName = '';
+    undoStack = [];
     fileInput.value = '';
     invoiceSelect.innerHTML = '<option value="">Select an invoice...</option>';
     controls.style.display = 'none';
@@ -713,7 +760,7 @@
       'secondaryunitofmeasure3': "",
       'secondaryvalue': "",
       'FTZStatus': "",
-      'FTZPrivilegedDate\\u00a0': "",
+      'FTZPrivilegedDate\u00a0': "",
       'ThirdTariffNumber': "",
       'ThirdTariffDescription': "",
       'ThirdTariffQuantity1': "",
@@ -740,7 +787,7 @@
       '5TariffUnitofMeasure2': "",
       '5TariffQuantity3': "",
       '5TariffUnitofMeasure3': "",
-      '5 Value': "",
+      '5 Value': ""
     };
     row['UnitPrice'] = computeExportUnitPrice({quantity: item.quantity, line_total: item.line_total});
     return row;
@@ -752,15 +799,15 @@
       return;
     }
 
-    // Sort by invoice then position
-    const items = allData.slice().sort((a, b) => {
+    // Sort by invoice then position (numeric, then A/B suffix if used)
+    const items = allData.slice().sort((a,b) => {
       const ai = String(a.invoice_number || '');
       const bi = String(b.invoice_number || '');
       if (ai !== bi) return ai.localeCompare(bi);
       const A = (String(a.position || '').match(/^(\d+)([A-Z]?)$/) || []);
       const B = (String(b.position || '').match(/^(\d+)([A-Z]?)$/) || []);
-      const an = parseInt(A[1] || 999999, 10);
-      const bn = parseInt(B[1] || 999999, 10);
+      const an = parseInt(A[1] || '999999',10);
+      const bn = parseInt(B[1] || '999999',10);
       if (an !== bn) return an - bn;
       return (A[2] || '').localeCompare(B[2] || '');
     });
