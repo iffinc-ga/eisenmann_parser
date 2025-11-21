@@ -100,7 +100,7 @@
     <select id="invoiceSelect"><option value="">Select an invoice...</option></select>
     <button class="btn-success" onclick="exportToDescartes()">📊 Export (All Invoices) to Excel</button>
     <button class="btn-primary" onclick="resetUpload()">📤 New Upload</button>
-    <button class="btn-light" onclick="console.log('=== ALL DATA ===', allData)">🐛 Debug: Dump Data</button>
+    <button class="btn-light" onclick="debugDumpData()">🐛 Debug: Dump Data</button>
     <span class="inline-help">Use Tab / Shift+Tab to move across cells. Edit invoice totals/dates at the top.</span>
   </div>
 
@@ -570,6 +570,23 @@
       if (!invNum) continue; // skip sentinel
       const block = text.slice(start, end);
 
+      console.log(`\n========== INVOICE ${invNum} BLOCK ==========`);
+      console.log('Block length:', block.length);
+      console.log('First 500 chars:', block.substring(0, 500));
+      console.log('Last 500 chars:', block.substring(block.length - 500));
+      
+      // Look for steel content specifically
+      if (block.includes('Steel')) {
+        const steelIdx = block.indexOf('Steel');
+        console.log('Found "Steel" at position:', steelIdx);
+        console.log('Context around Steel:', block.substring(steelIdx - 50, steelIdx + 150));
+      }
+      if (block.includes('steel')) {
+        const steelIdx = block.indexOf('steel');
+        console.log('Found "steel" (lowercase) at position:', steelIdx);
+        console.log('Context around steel:', block.substring(steelIdx - 50, steelIdx + 150));
+      }
+
       // Invoice total: "Netamount 11,773.90" (no space between Net and amount in PDF extraction)
       let invoiceTotal = '';
       const totalMatch = block.match(/Net\s*amount\s+([\d.,]+)/i);
@@ -926,6 +943,27 @@
     stats.style.display = 'none';
     tableCont.style.display = 'none';
     uploadSec.style.display = 'block';
+  }
+
+  function debugDumpData() {
+    console.log('========== DEBUG DATA DUMP ==========');
+    console.log('Total rows in allData:', allData.length);
+    console.log('Invoice order:', invoiceOrder);
+    console.log('Current invoice:', currentInvoice);
+    
+    // Show first 5 rows with their metal content
+    console.log('\nFirst 5 rows:');
+    allData.slice(0, 5).forEach((row, idx) => {
+      console.log(`\nRow ${idx}:`, {
+        invoice: row.invoice_number,
+        position: row.position,
+        part: row.part_number,
+        hasMetalContent: !!row.metal_content,
+        metalContent: row.metal_content
+      });
+    });
+    
+    console.log('\nFull allData:', allData);
   }
 
   // ========= EXPORT =========
