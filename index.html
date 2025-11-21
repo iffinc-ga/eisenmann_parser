@@ -39,11 +39,11 @@
     .table-header-wrapper{background:#343a40;overflow:auto}
     .table-header-wrapper::-webkit-scrollbar{display:none}
     .table-header-wrapper{scrollbar-width:none}
-    .table-header{min-width:1100px}
+    .table-header{min-width:1350px}
     .table-header table{width:100%;border-collapse:collapse}
     .table-header th{background:#343a40;color:#fff;padding:8px;text-align:left;font-weight:600;font-size:13px;border:none}
     .table-body-wrapper{max-height:560px;overflow:auto}
-    .table-body{min-width:1100px}
+    .table-body{min-width:1350px}
     .table-body table{width:100%;border-collapse:collapse}
     .table-body td{padding:6px 6px;border-bottom:1px solid #dee2e6;background:#fff}
     .table-body tr:hover td{background:#f8f9fa}
@@ -53,6 +53,7 @@
     .actions{text-align:center;white-space:nowrap}
     .actions button{padding:4px 8px;font-size:11px;margin:0 2px}
     .alert{margin:0 20px 20px;border-radius:4px;padding:10px 14px;font-size:13px;display:none}
+    @keyframes spin{0%{transform:rotate(0)}100%{transform:rotate(360deg)}}
     .table-header table,.table-body table{table-layout:fixed}
     .table-header th:nth-child(1),.table-body td:nth-child(1){width:52px!important}
     .table-header th:nth-child(2),.table-body td:nth-child(2){width:190px!important}
@@ -62,14 +63,22 @@
     .table-header th:nth-child(6),.table-body td:nth-child(6){width:110px!important}
     .table-header th:nth-child(7),.table-body td:nth-child(7){width:110px!important}
     .table-header th:nth-child(8),.table-body td:nth-child(8){width:110px!important}
-    .table-header th:nth-child(9),.table-body td:nth-child(9){width:110px!important}
+    .table-header th:nth-child(9),.table-body td:nth-child(9){width:250px!important}
+    .table-header th:nth-child(10),.table-body td:nth-child(10){width:110px!important}
+    .metal-badge{display:inline-block;padding:2px 6px;margin:2px;border-radius:3px;font-size:11px;font-weight:600}
+    .metal-steel{background:#c0c0c0;color:#333}
+    .metal-copper{background:#b87333;color:#fff}
+    .metal-aluminum{background:#a8a9ad;color:#fff}
+    .metal-none{background:#d4edda;color:#155724;padding:4px 8px}
+    .metal-info{font-size:11px;line-height:1.4}
+    .country-melt{font-style:italic;color:#6c757d;font-size:10px;display:block;margin-top:2px}
   </style>
 </head>
 <body>
 <div class="container">
   <div class="header">
     <h1>📄 Eisenmann Invoice PDF Parser</h1>
-    <p>Parse Eisenmann customs invoices into editable line items and export to Descartes template.</p>
+    <p>Parse Eisenmann customs invoices into editable line items and export to Excel.</p>
   </div>
 
   <div class="upload-section" id="uploadSection">
@@ -89,8 +98,7 @@
 
   <div class="controls" id="controls">
     <select id="invoiceSelect"><option value="">Select an invoice...</option></select>
-    <button class="btn-success" onclick="exportToDescartes()">📊 Export (All Invoices) to Descartes Excel</button>
-    <button class="btn-light" onclick="undoLast()">↩️ Undo last change</button>
+    <button class="btn-success" onclick="exportToDescartes()">📊 Export (All Invoices) to Excel</button>
     <button class="btn-primary" onclick="resetUpload()">📤 New Upload</button>
     <span class="inline-help">Use Tab / Shift+Tab to move across cells. Edit invoice totals/dates at the top.</span>
   </div>
@@ -141,8 +149,9 @@
             <th>Unit</th>
             <th>Unit Price</th>
             <th>Line Total</th>
-            <th>Net Weight (per line)</th>
+            <th>Net Weight</th>
             <th>Country</th>
+            <th>Metal Content</th>
             <th>Actions</th>
           </tr>
           </thead>
@@ -169,7 +178,6 @@
   let currentInvoice = '';
   let invoiceOrder = [];
   let uploadedPdfName = '';
-  let undoStack = [];
 
   const uploadBox   = document.getElementById('uploadBox');
   const fileInput   = document.getElementById('fileInput');
@@ -194,7 +202,7 @@
     });
   }
 
-  // ========= HELPERS =========
+  // ========= UI HELPERS =========
   function showAlert(msg, type='success') {
     alertBox.textContent = msg;
     alertBox.style.display = 'block';
@@ -217,62 +225,93 @@
     return isNaN(n) ? NaN : n;
   }
 
-  // robust EU/US number parsing
-  function parseNum(s){
-    if (s == null) return NaN;
-    const t = String(s).trim();
-    if (!t) return NaN;
+  // Helper to parse metal content from text section
+  function parseMetalContent(text) {
+    const metalContent = {
+      hasMetals: false,
+      metals: [],
+      noContent: false
+    };
 
-    // 1.234,56 or 1,234.56
-    if (/\d+[.,]\d{3}[.,]\d{2}$/.test(t)) {
-      const lastDot = t.lastIndexOf('.');
-      const lastComma = t.lastIndexOf(',');
-      const decSep = (lastComma > lastDot) ? ',' : '.';
-      if (decSep === ',') {
-        return parseFloat(t.replace(/\./g,'').replace(',', '.'));
-      } else {
-        return parseFloat(t.replace(/,/g,''));
-      }
+    // Check for "Does not contain" statement
+    if (text.includes('Does not contain any aluminum') || 
+        text.includes('Steel or Copper')) {
+      metalContent.noContent = true;
+      return metalContent;
     }
-    // 1234,56
-    if (/,\d{2}$/.test(t) && !/\.\d{2}$/.test(t)) {
-      return parseFloat(t.replace(/\./g,'').replace(',', '.'));
+
+    // Parse steel content - simplified pattern to match "Steel content 100%: 11,4 kg"
+    let steelMatch = text.match(/Steel\s*content\s*(\d+)\s*%\s*:\s*([\d,\.]+)\s*kg/i);
+    if (steelMatch) {
+      metalContent.hasMetals = true;
+      // Replace comma with period for proper float parsing
+      const weightStr = steelMatch[2].replace(',', '.');
+      metalContent.metals.push({
+        type: 'Steel',
+        percentage: parseInt(steelMatch[1]),
+        weight: parseFloat(weightStr),
+        unit: 'kg',
+        mixture: !text.includes('No mixture'),
+        countryMeltPour: extractCountryMeltPour(text)
+      });
     }
-    return parseFloat(t.replace(/,/g,''));
+
+    // Parse copper content - simplified pattern
+    let copperMatch = text.match(/Copper\s*content\s*(\d+)\s*%\s*:\s*([\d,\.]+)\s*kg/i);
+    if (copperMatch) {
+      metalContent.hasMetals = true;
+      const weightStr = copperMatch[2].replace(',', '.');
+      metalContent.metals.push({
+        type: 'Copper',
+        percentage: parseInt(copperMatch[1]),
+        weight: parseFloat(weightStr),
+        unit: 'kg',
+        mixture: !text.includes('No mixture')
+      });
+    }
+
+    // Parse aluminum content - simplified pattern  
+    let aluminumMatch = text.match(/Aluminum\s*content\s*(\d+)\s*%\s*:\s*([\d,\.]+)\s*kg/i);
+    if (aluminumMatch) {
+      metalContent.hasMetals = true;
+      const weightStr = aluminumMatch[2].replace(',', '.');
+      metalContent.metals.push({
+        type: 'Aluminum',
+        percentage: parseInt(aluminumMatch[1]),
+        weight: parseFloat(weightStr),
+        unit: 'kg',
+        mixture: !text.includes('No mixture'),
+        countryMeltPour: extractCountryMeltPour(text)
+      });
+    }
+
+    return metalContent;
   }
 
-  function computeExportUnitPrice(item){
-    const q = parseNum(item.quantity);
-    const t = parseNum(item.line_total);
-    if (isFinite(q) && q > 0 && isFinite(t)) {
-      return (t / q).toFixed(6);
+  // Helper to extract and convert country of melt & pour
+  function extractCountryMeltPour(text) {
+    // Try different variations of the pattern
+    let countryMatch = text.match(/Country\s*of\s*Melt\s*&\s*Pour\s*:\s*(\w+)/i);
+    if (!countryMatch) {
+      countryMatch = text.match(/Country\s*of\s*Melt\s*and\s*Pour\s*:\s*(\w+)/i);
     }
-    return '';
-  }
-
-  // ========= UNDO =========
-  function pushUndo() {
-    undoStack.push(JSON.parse(JSON.stringify(allData)));
-    if (undoStack.length > 50) undoStack.shift();
-  }
-
-  function undoLast() {
-    if (!undoStack.length) {
-      showAlert('Nothing to undo', 'error');
-      return;
+    if (countryMatch) {
+      const code = countryMatch[1].toUpperCase();
+      const countryMap = {
+        'GER': 'Germany',
+        'USA': 'United States',
+        'CHN': 'China',
+        'JPN': 'Japan',
+        'FRA': 'France',
+        'ITA': 'Italy',
+        'UK': 'United Kingdom',
+        'GB': 'United Kingdom',
+        'DE': 'Germany',
+        'DEU': 'Germany'
+      };
+      return countryMap[code] || code;
     }
-    allData = undoStack.pop() || [];
-    invoiceOrder = [...new Set(allData.map(r => r.invoice_number))];
-    if (!invoiceOrder.length) {
-      tableCont.style.display = 'none';
-      stats.style.display = 'none';
-      return;
-    }
-    if (!currentInvoice || !invoiceOrder.includes(currentInvoice)) {
-      currentInvoice = invoiceOrder[0] || '';
-    }
-    loadInvoiceData();
-    showAlert('Last change undone.', 'success');
+    return null;
   }
 
   // ========= FILE HANDLING =========
@@ -306,7 +345,6 @@
       return;
     }
     uploadedPdfName = (file.name || '').replace(/\.pdf$/i, '');
-    undoStack = [];
 
     uploadSec.style.display = 'none';
     loadingPane.style.display = 'block';
@@ -362,142 +400,112 @@
     invoiceOrder = [];
     text = String(text || '');
 
-    // Handles "Invoice no. / Date:" and "Invoice no. / Datum:"
-    const invoicePattern =
-      /Invoice\s*no\.\s*\/\s*(?:Date|Datum):\s*(\d+)\s*\/\s*(\d{2}\/\d{2}\/\d{4})/g;
-
+    // 1) Find each "Invoice no. / Date:" header
+    const invoicePattern = /Invoice no\. \/ Date:\s*(\d+)\s*\/\s*(\d{2}\/\d{2}\/\d{4})/g;
     const headers = [];
     let m;
-    let lastInv = null;
-
     while ((m = invoicePattern.exec(text)) !== null) {
-      const invNum = m[1];
-      const invDate = m[2];
-      // skip duplicate header on page 2 (same invoice)
-      if (invNum === lastInv) continue;
       headers.push({
         index: m.index,
-        invoice_number: invNum,
-        invoice_date: invDate
+        invoice_number: m[1],
+        invoice_date: m[2]
       });
-      lastInv = invNum;
     }
     // Sentinel
     headers.push({ index: text.length, invoice_number: null, invoice_date: null });
 
-    // Example line:
-    // 000010 F000172334 3 PC 140.64 USD 1 PC 421.91
-    const linePattern =
-      /(\d{5,6})\s+([A-Z0-9]+)\s+(\d+)\s*(PC)?\s+([\d.,]+)\s+USD\s+(\d+)\s*(PC)?\s+([\d.,]+)/g;
+    const linePattern = /(\d{5,6})\s+([A-Z0-9]+)\s+([\d.,]+)\s+([A-Z]+)\s+([\d.,]+)\s+USD\s+([\d.,]+)\s+([A-Z]+)\s+([\d.,]+)/g;
 
     for (let i = 0; i < headers.length - 1; i++) {
-      const startIdx = headers[i].index;
-      const endIdx   = headers[i + 1].index;
-      const invNum   = headers[i].invoice_number;
-      const invDate  = headers[i].invoice_date;
+      const start = headers[i].index;
+      const end   = headers[i + 1].index;
+      const invNum  = headers[i].invoice_number;
+      const invDate = headers[i].invoice_date;
 
-      if (!invNum) continue;
-      const block = text.slice(startIdx, endIdx);
+      if (!invNum) continue; // skip sentinel
+      const block = text.slice(start, end);
 
-      // Invoice total: "Net amount 4,398.92"
+      // Invoice total: "Netamount 11,773.90" (no space between Net and amount in PDF extraction)
       let invoiceTotal = '';
       const totalMatch = block.match(/Net\s*amount\s+([\d.,]+)/i);
-      if (totalMatch) invoiceTotal = totalMatch[1];
+      if (totalMatch) invoiceTotal = totalMatch[1].replace(/,/g, '');
 
-      // Invoice net weight: "Net Weight 78.000 KG"
-      let invoiceNetWeight = '';
-      const netWMatch = block.match(/Net\s*Weight\s+([\d.,]+)\s*KG/i);
-      if (netWMatch) invoiceNetWeight = netWMatch[1];
-
-      // Metal content totals: "Steel content 100%: 11,4 kg" etc.
-      let steelTotalKg = 0;
-      let aluminumTotalKg = 0;
-      let copperTotalKg = 0;
-
-      const metalRegex =
-        /(Steel|Aluminum|Copper)\s+content\s*100%:\s*([\d.,]+)\s*kg/gi;
-      let mm;
-      while ((mm = metalRegex.exec(block)) !== null) {
-        const kind = (mm[1] || '').toLowerCase();
-        const raw  = mm[2] || '';
-        const val  = parseNum(raw);
-        if (!isFinite(val)) continue;
-        if (kind === 'steel') steelTotalKg += val;
-        else if (kind === 'aluminum') aluminumTotalKg += val;
-        else if (kind === 'copper') copperTotalKg += val;
-      }
-
-      const steelStr    = steelTotalKg   ? steelTotalKg.toFixed(3)    : '';
-      const aluminumStr = aluminumTotalKg? aluminumTotalKg.toFixed(3) : '';
-      const copperStr   = copperTotalKg  ? copperTotalKg.toFixed(3)   : '';
-
+      // Find lines in this invoice
       const lineMatches = [...block.matchAll(linePattern)];
-
       if (!lineMatches.length) {
-        // Fallback row so invoice header still appears
+        // create an empty row so user can still see invoice header
         allData.push({
           invoice_number: invNum,
-          invoice_date:   invDate,
-          invoice_total:  invoiceTotal,
-          supplier:       'Eisenmann GmbH',
+          invoice_date: invDate,
+          invoice_total: invoiceTotal,
+          supplier: 'Eisenmann GmbH',
           position: '',
           part_number: '',
           quantity: '',
-          unit: 'PC',
+          unit: '',
           unit_price: '',
           line_total: '',
-          net_weight: invoiceNetWeight || '',
+          net_weight: '',
           country_of_origin: '',
           hts_code: '',
-          steel_kg:   steelStr,
-          aluminum_kg: aluminumStr,
-          copper_kg:  copperStr
+          metal_content: { hasMetals: false, metals: [], noContent: false }
         });
         continue;
       }
 
-      lineMatches.forEach(lm => {
-        const position   = lm[1]; // 000010
-        const material   = lm[2]; // F000172334
-        const qty        = lm[3]; // 3
-        const unit1      = lm[4] || 'PC';
-        const priceEach  = lm[5]; // 140.64
-        const lineTotal  = lm[8]; // 421.91
+      lineMatches.forEach((lm, idx) => {
+        const position = lm[1];
+        const material = lm[2];
+        const qty1     = (lm[3] || '').replace(/,/g, '');
+        const unit1    = lm[4];
+        const unitPrice = (lm[5] || '').replace(/,/g, '');
+        const rawTotal  = lm[8] || '';
 
-        // Local slice to pick up HTS & COO
+        const cleanTotal = rawTotal
+          .replace(/[^0-9.,]/g, '') // strip "Page" etc
+          .replace(/,/g, '');
+
+        // Look at text between this match and the next to get HTS and COO
         const itemStart = lm.index || 0;
-        const itemSection = block.slice(itemStart);
+        const itemEnd   = (idx + 1 < lineMatches.length)
+          ? (lineMatches[idx + 1].index || block.length)
+          : block.length;
+        const itemSection = block.slice(itemStart, itemEnd);
 
         let hts = '';
-        const htsMatch =
-          itemSection.match(/Commodity\s*Code\s*\/\s*Import\s*Code\s*Number:\s*([0-9]+)/i);
+        const htsMatch = itemSection.match(/Commodity Code\s*\/\s*Import Code Number:\s*([0-9]+)/i);
         if (htsMatch) hts = htsMatch[1];
 
         let coo = '';
-        const cooMatch =
-          itemSection.match(/Country\s+of\s+origin:\s*([A-Za-z]+)/i);
-        if (cooMatch) {
-          coo = cooMatch[1].trim();
-          if (coo.toLowerCase().startsWith('germany')) coo = 'DE';
+        const cooMatch = itemSection.match(/Country of origin:\s*([A-Za-z ]+)/i);
+        if (cooMatch) coo = cooMatch[1].trim();
+        if (coo.toLowerCase().includes('germany')) coo = 'DE';
+
+        // Parse metal content
+        const metalContent = parseMetalContent(itemSection);
+        
+        // Debug logging (remove in production)
+        if (position === '000010' || position === '000011') {
+          console.log(`=== Item ${position} ===`);
+          console.log('Item section text:', itemSection.substring(0, 500));
+          console.log('Metal content found:', metalContent);
         }
 
         allData.push({
           invoice_number: invNum,
-          invoice_date:   invDate,
-          invoice_total:  invoiceTotal,
-          supplier:       'Eisenmann GmbH',
-          position:       position,
-          part_number:    material,
-          quantity:       qty,
-          unit:           unit1,
-          unit_price:     priceEach,
-          line_total:     lineTotal,
-          net_weight:     invoiceNetWeight || '',
+          invoice_date: invDate,
+          invoice_total: invoiceTotal,
+          supplier: 'Eisenmann GmbH',
+          position: position,
+          part_number: material,
+          quantity: qty1,
+          unit: unit1,
+          unit_price: unitPrice,
+          line_total: cleanTotal,
+          net_weight: '',
           country_of_origin: coo,
-          hts_code:       hts,
-          steel_kg:       steelStr,
-          aluminum_kg:    aluminumStr,
-          copper_kg:      copperStr
+          hts_code: hts,
+          metal_content: metalContent
         });
       });
     }
@@ -530,6 +538,45 @@
     currentInvoice = e.target.value;
     loadInvoiceData();
   });
+
+  // Helper to render metal content for table cell
+  function renderMetalContent(metalContent) {
+    if (!metalContent) {
+      return '<span style="color:#999;font-size:11px;">-</span>';
+    }
+
+    if (metalContent.noContent) {
+      return '<span class="metal-badge metal-none">No Al/Steel/Cu</span>';
+    }
+
+    if (!metalContent.hasMetals || !metalContent.metals || metalContent.metals.length === 0) {
+      return '<span style="color:#999;font-size:11px;">-</span>';
+    }
+
+    let html = '';
+    metalContent.metals.forEach(metal => {
+      const badgeClass = metal.type === 'Steel' ? 'metal-steel' : 
+                        metal.type === 'Copper' ? 'metal-copper' : 
+                        'metal-aluminum';
+      const symbol = metal.type === 'Steel' ? 'Fe' : 
+                    metal.type === 'Copper' ? 'Cu' : 'Al';
+      
+      html += `<div style="margin-bottom:4px;">
+        <span class="metal-badge ${badgeClass}">${symbol}</span> 
+        <span style="font-size:11px;">
+          ${metal.percentage}% (${metal.weight} ${metal.unit})
+          ${metal.mixture ? '' : ' <em>No mix</em>'}
+        </span>`;
+      
+      if (metal.countryMeltPour) {
+        html += `<span class="country-melt">${metal.countryMeltPour}</span>`;
+      }
+      
+      html += '</div>';
+    });
+
+    return html;
+  }
 
   function loadInvoiceData() {
     const tbody = document.getElementById('tableBody');
@@ -564,16 +611,22 @@
       tr.appendChild(makeCell('net_weight'));
       tr.appendChild(makeCell('country_of_origin'));
 
+      // Add metal content cell (non-editable display)
+      const tdMetal = document.createElement('td');
+      tdMetal.className = 'metal-info';
+      tdMetal.innerHTML = renderMetalContent(row.metal_content);
+      tr.appendChild(tdMetal);
+
       const tdAct = document.createElement('td');
       tdAct.className = 'actions';
       const btnAdd = document.createElement('button');
       btnAdd.textContent = '+ Below';
       btnAdd.className = 'btn-light';
-      btnAdd.addEventListener('click', () => { pushUndo(); addRowBelow(globalIdx); });
+      btnAdd.addEventListener('click', () => addRowBelow(globalIdx));
       const btnDel = document.createElement('button');
       btnDel.textContent = 'Delete';
       btnDel.className = 'btn-danger';
-      btnDel.addEventListener('click', () => { pushUndo(); deleteRow(globalIdx); });
+      btnDel.addEventListener('click', () => deleteRow(globalIdx));
       tdAct.appendChild(btnAdd);
       tdAct.appendChild(btnDel);
       tr.appendChild(tdAct);
@@ -588,7 +641,6 @@
     const idx = parseInt(e.target.dataset.index, 10);
     const field = e.target.dataset.field;
     if (Number.isNaN(idx) || !field) return;
-    pushUndo();
     allData[idx][field] = e.target.value;
     updateStats();
   }
@@ -638,7 +690,6 @@
   }
 
   function updateInvoiceField(field, value) {
-    pushUndo();
     allData.forEach(r => {
       if (r.invoice_number === currentInvoice) {
         r[field] = value;
@@ -656,21 +707,19 @@
     if (!base) return;
     const newRow = {
       invoice_number: base.invoice_number,
-      invoice_date:   base.invoice_date,
-      invoice_total:  base.invoice_total,
-      supplier:       base.supplier,
+      invoice_date: base.invoice_date,
+      invoice_total: base.invoice_total,
+      supplier: base.supplier,
       position: '',
       part_number: '',
       quantity: '',
-      unit: base.unit || 'PC',
+      unit: '',
       unit_price: '',
       line_total: '',
-      net_weight: base.net_weight || '',
+      net_weight: '',
       country_of_origin: base.country_of_origin || '',
       hts_code: base.hts_code || '',
-      steel_kg: base.steel_kg || '',
-      aluminum_kg: base.aluminum_kg || '',
-      copper_kg: base.copper_kg || ''
+      metal_content: { hasMetals: false, metals: [], noContent: false }
     };
     allData.splice(globalIdx + 1, 0, newRow);
     loadInvoiceData();
@@ -687,7 +736,6 @@
     invoiceOrder = [];
     currentInvoice = '';
     uploadedPdfName = '';
-    undoStack = [];
     fileInput.value = '';
     invoiceSelect.innerHTML = '<option value="">Select an invoice...</option>';
     controls.style.display = 'none';
@@ -696,127 +744,70 @@
     uploadSec.style.display = 'block';
   }
 
-  // ========= EXPORT TO DESCARTES TEMPLATE =========
-  function buildDescartesRow(item) {
-    const row = {
-      'InvoiceNumber': item.invoice_number || "",
-      'InvoiceDate': item.invoice_date || "",
-      'InvoiceTotal': item.invoice_total || "",
-      'SupplierMID': "",
-      'SupplierName': item.supplier || "",
-      'BuyerPartNumber': item.part_number || "",
-      'SupplierPartNumber': item.part_number || "",
-      'Quantity': item.quantity || "",
-      'UnitOfMeasure': item.unit || "",
-      'Description': "",
-      'UnitPrice': "",
-      'ItemTotal': item.line_total || "",
-      'CurrencyCode': "USD",
-      'ExchangeRate': "",
-      'CountryOfOrigin': item.country_of_origin || "",
-      'CountryOfExport': "",
-      'DateOfExport': "",
-      'PortOfLading': "",
-      'RelatedParty': "",
-      'PO_Number': "",
-      'PO_Date': "",
-      'GrossWeight': "",
-      'GrossWeightUnit': "",
-      'NetWeight': item.net_weight || "",
-      'TariffNumber': item.hts_code || "",
-      'TariffDescription': "",
-      'Quantity1': "",
-      'UnitOfMeasure1': "",
-      'Quantity2': "",
-      'UnitOfMeasure2': "",
-      'Quantity3': "",
-      'UnitOfMeasure3': "",
-      'PrimarySPI': "",
-      'SecondarySPI': "",
-      'DeliverTo': "",
-      'SoldTo': "",
-      'SellerMID': "",
-      'ShipperMID': "",
-      'EntryDate': "",
-      'ArrivalDate': "",
-      'Carrier': "",
-      'Vessel': "",
-      'Voyage': "",
-      'PortOfEntry': "",
-      'PortOfUnloading': "",
-      'LocationCode': "",
-      'TotalCharges': "",
-      'BillOfLadingNumber': "",
-      'Container': "",
-      'SecondaryTariffNumber': "",
-      'SecondaryTariffdescription': "",
-      'Secondary Quantity1': "",
-      'Secondaryunitofmeasure1': "",
-      'secondaryquantity2': "",
-      'secondaryunitofmeasure2': "",
-      'secondaryquantity3': "",
-      'secondaryunitofmeasure3': "",
-      'secondaryvalue': "",
-      'FTZStatus': "",
-      'FTZPrivilegedDate\u00a0': "",
-      'ThirdTariffNumber': "",
-      'ThirdTariffDescription': "",
-      'ThirdTariffQuantity1': "",
-      'ThirdTariffUnitofMeasure1': "",
-      'ThirdTariffQuantity2': "",
-      'ThirdTariffUnitofMeasure2': "",
-      'ThirdTariffQuantity3': "",
-      'ThirdTariffUnitofMeasure3': "",
-      'Third Value': "",
-      '4TariffNumber': "",
-      '4TariffDescription': "",
-      '4TariffQuantity1': "",
-      '4TariffUnitofMeasure1': "",
-      '4TariffQuantity2': "",
-      '4TariffUnitofMeasure2': "",
-      '4TariffQuantity3': "",
-      '4TariffUnitofMeasure3': "",
-      '4 Value': "",
-      '5TariffNumber': "",
-      '5TariffDescription': "",
-      '5TariffQuantity1': "",
-      '5TariffUnitofMeasure1': "",
-      '5TariffQuantity2': "",
-      '5TariffUnitofMeasure2': "",
-      '5TariffQuantity3': "",
-      '5TariffUnitofMeasure3': "",
-      '5 Value': ""
-    };
-    row['UnitPrice'] = computeExportUnitPrice({quantity: item.quantity, line_total: item.line_total});
-    return row;
-  }
-
+  // ========= EXPORT =========
   function exportToDescartes() {
     if (!allData.length) {
       showAlert('No data to export.', 'error');
       return;
     }
+    
+    const rows = [];
+    allData.forEach(r => {
+      const baseRow = {
+        InvoiceNumber: r.invoice_number,
+        InvoiceDate:   r.invoice_date,
+        InvoiceTotal:  r.invoice_total,
+        SupplierName:  r.supplier,
+        Position:      r.position,
+        PartNumber:    r.part_number,
+        Quantity:      r.quantity,
+        Unit:          r.unit,
+        UnitPrice:     r.unit_price,
+        LineTotal:     r.line_total,
+        CountryOfOrigin: r.country_of_origin,
+        HTSCode:       r.hts_code || ''
+      };
 
-    // Sort by invoice then position (numeric, then A/B suffix)
-    const items = allData.slice().sort((a,b) => {
-      const ai = String(a.invoice_number || '');
-      const bi = String(b.invoice_number || '');
-      if (ai !== bi) return ai.localeCompare(bi);
-      const A = (String(a.position || '').match(/^(\d+)([A-Z]?)$/) || []);
-      const B = (String(b.position || '').match(/^(\d+)([A-Z]?)$/) || []);
-      const an = parseInt(A[1] || '999999',10);
-      const bn = parseInt(B[1] || '999999',10);
-      if (an !== bn) return an - bn;
-      return (A[2] || '').localeCompare(B[2] || '');
+      // Add metal content columns
+      if (r.metal_content && r.metal_content.noContent) {
+        rows.push({
+          ...baseRow,
+          MetalType: 'None',
+          MetalPercentage: '',
+          MetalWeight: '',
+          MetalUnit: '',
+          CountryMeltPour: ''
+        });
+      } else if (r.metal_content && r.metal_content.hasMetals && r.metal_content.metals.length > 0) {
+        // Create a row for each metal type
+        r.metal_content.metals.forEach(metal => {
+          rows.push({
+            ...baseRow,
+            MetalType: metal.type,
+            MetalPercentage: metal.percentage,
+            MetalWeight: metal.weight,
+            MetalUnit: metal.unit,
+            CountryMeltPour: metal.countryMeltPour || ''
+          });
+        });
+      } else {
+        // No metal content info
+        rows.push({
+          ...baseRow,
+          MetalType: '',
+          MetalPercentage: '',
+          MetalWeight: '',
+          MetalUnit: '',
+          CountryMeltPour: ''
+        });
+      }
     });
-
-    const rows = items.map(it => buildDescartesRow(it));
 
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.json_to_sheet(rows);
-    XLSX.utils.book_append_sheet(wb, ws, 'Descartes');
+    XLSX.utils.book_append_sheet(wb, ws, 'Eisenmann');
 
-    const fname = (uploadedPdfName ? uploadedPdfName + '_' : '') + 'eisenmann_descartes.xlsx';
+    const fname = (uploadedPdfName ? uploadedPdfName + '_' : '') + 'eisenmann_parsed.xlsx';
     XLSX.writeFile(wb, fname);
   }
 </script>
