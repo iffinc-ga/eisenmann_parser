@@ -262,6 +262,12 @@
     steelMatches.forEach((m, i) => {
       console.log(`  Steel ${i}: ${m[1]}% ${m[2]}kg at position ${m.index}`);
     });
+    copperMatches.forEach((m, i) => {
+      console.log(`  Copper ${i}: ${m[1]}% ${m[2]}kg at position ${m.index}`);
+    });
+    noContentMatches.forEach((m, i) => {
+      console.log(`  NoContent ${i} at position ${m.index}`);
+    });
     
     // Collect all declarations with their positions
     const allDeclarations = [];
@@ -299,21 +305,41 @@
     });
     
     console.log('Total declarations found:', allDeclarations.length);
+    console.log('Declarations in order:');
+    allDeclarations.forEach((d, i) => {
+      console.log(`  ${i}: ${d.type} at position ${d.position}`);
+    });
     
     // Sort by position in text
     allDeclarations.sort((a, b) => a.position - b.position);
     
-    // Group declarations - only group different metal types together (steel+copper for same item)
-    // Consecutive declarations of the SAME type should be separate groups (different items)
+    console.log('After sorting by position:');
+    allDeclarations.forEach((d, i) => {
+      console.log(`  ${i}: ${d.type} at position ${d.position}`);
+    });
+    
+    // Group declarations - rules:
+    // 1. "none" (Does not contain) = always separate group
+    // 2. Same metal type = separate groups (different items)
+    // 3. Different metal types close together (within 50 chars) = same group (e.g., steel + copper for same item)
     let currentGroup = null;
     const groups = [];
     
-    allDeclarations.forEach(decl => {
+    allDeclarations.forEach((decl, declIdx) => {
       const needNewGroup = !currentGroup || 
-                          (decl.position - currentGroup.lastPosition) > 100 || // Reduced from 200 to 100
+                          decl.type === 'none' || // "Does not contain" always gets own group
+                          currentGroup.lastType === 'none' || // Don't group after "Does not contain"
+                          (decl.position - currentGroup.lastPosition) > 50 || // Reduced to 50 chars
                           (currentGroup.lastType === decl.type && decl.type !== 'none'); // Same metal type = new group
       
       if (needNewGroup) {
+        const reason = !currentGroup ? 'first' :
+                      decl.type === 'none' ? 'is-none' :
+                      currentGroup.lastType === 'none' ? 'after-none' :
+                      (decl.position - currentGroup.lastPosition) > 50 ? 'too-far' :
+                      'same-type';
+        console.log(`  Decl ${declIdx} (${decl.type} @ ${decl.position}): NEW GROUP (reason: ${reason})`);
+        
         // Start new group
         currentGroup = {
           metals: [],
@@ -322,6 +348,8 @@
           lastType: decl.type
         };
         groups.push(currentGroup);
+      } else {
+        console.log(`  Decl ${declIdx} (${decl.type} @ ${decl.position}): SAME GROUP (distance: ${decl.position - currentGroup.lastPosition})`);
       }
       
       currentGroup.lastPosition = decl.position;
@@ -361,6 +389,10 @@
         console.log(`  Group ${i}: Empty`);
       }
     });
+    
+    // If we have fewer groups than expected, pad with empty groups
+    // This helps when some items have no metal declaration in the text
+    // Note: This is a heuristic - works best when declarations appear in same order as line items
     
     // Convert groups to metal content objects
     const result = groups.map(group => {
