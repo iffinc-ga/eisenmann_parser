@@ -230,9 +230,20 @@
   function extractAllMetalContent(text) {
     const metalDeclarations = [];
     
+    console.log('=== Extracting Metal Content ===');
+    console.log('Text length:', text.length);
+    
+    // Debug: Show a sample of the text
+    if (text.includes('Steel content')) {
+      const idx = text.indexOf('Steel content');
+      console.log('Found "Steel content" at position:', idx);
+      console.log('Context:', text.substring(idx - 50, idx + 150));
+    }
+    
     // Find all "Does not contain" declarations
     const noContentPattern = /Does\s+not\s+contain\s+any\s+aluminum[,\s]+Steel\s+or\s+Copper/gi;
     const noContentMatches = [...text.matchAll(noContentPattern)];
+    console.log('Found', noContentMatches.length, '"Does not contain" declarations');
     
     // Find all metal content declarations with their positions
     const steelPattern = /Steel\s*content\s*(\d+)\s*%\s*:\s*([\d,\.]+)\s*kg/gi;
@@ -242,6 +253,14 @@
     const steelMatches = [...text.matchAll(steelPattern)];
     const copperMatches = [...text.matchAll(copperPattern)];
     const aluminumMatches = [...text.matchAll(aluminumPattern)];
+    
+    console.log('Found', steelMatches.length, 'steel declarations');
+    console.log('Found', copperMatches.length, 'copper declarations');
+    console.log('Found', aluminumMatches.length, 'aluminum declarations');
+    
+    steelMatches.forEach((m, i) => {
+      console.log(`  Steel ${i}: ${m[1]}% ${m[2]}kg at position ${m.index}`);
+    });
     
     // Collect all declarations with their positions
     const allDeclarations = [];
@@ -277,6 +296,8 @@
         match: m
       });
     });
+    
+    console.log('Total declarations found:', allDeclarations.length);
     
     // Sort by position in text
     allDeclarations.sort((a, b) => a.position - b.position);
@@ -321,6 +342,8 @@
         currentGroup.metals.push(metal);
       }
     });
+    
+    console.log('Grouped into', groups.length, 'groups');
     
     // Convert groups to metal content objects
     return groups.map(group => {
