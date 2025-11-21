@@ -303,22 +303,29 @@
     // Sort by position in text
     allDeclarations.sort((a, b) => a.position - b.position);
     
-    // Group declarations by proximity (declarations within 200 chars are for same item)
+    // Group declarations - only group different metal types together (steel+copper for same item)
+    // Consecutive declarations of the SAME type should be separate groups (different items)
     let currentGroup = null;
     const groups = [];
     
     allDeclarations.forEach(decl => {
-      if (!currentGroup || (decl.position - currentGroup.lastPosition) > 200) {
+      const needNewGroup = !currentGroup || 
+                          (decl.position - currentGroup.lastPosition) > 100 || // Reduced from 200 to 100
+                          (currentGroup.lastType === decl.type && decl.type !== 'none'); // Same metal type = new group
+      
+      if (needNewGroup) {
         // Start new group
         currentGroup = {
           metals: [],
           noContent: false,
-          lastPosition: decl.position
+          lastPosition: decl.position,
+          lastType: decl.type
         };
         groups.push(currentGroup);
       }
       
       currentGroup.lastPosition = decl.position;
+      currentGroup.lastType = decl.type;
       
       if (decl.type === 'none') {
         currentGroup.noContent = true;
@@ -345,6 +352,15 @@
     });
     
     console.log('Grouped into', groups.length, 'groups');
+    groups.forEach((g, i) => {
+      if (g.metals.length > 0) {
+        console.log(`  Group ${i}: ${g.metals.length} metals - ${g.metals.map(m => `${m.type} ${m.percentage}% ${m.weight}kg`).join(' + ')}`);
+      } else if (g.noContent) {
+        console.log(`  Group ${i}: No content declaration`);
+      } else {
+        console.log(`  Group ${i}: Empty`);
+      }
+    });
     
     // Convert groups to metal content objects
     const result = groups.map(group => {
@@ -673,6 +689,16 @@
         // Get metal content for this item (match by index)
         const metalContent = metalContents[idx] || { hasMetals: false, metals: [], noContent: false };
         
+        // Calculate net weight from metal content if applicable
+        let netWeight = '';
+        if (metalContent.hasMetals && metalContent.metals.length > 0) {
+          // If there's a 100% metal, use its weight as net weight
+          const fullMetal = metalContent.metals.find(m => m.percentage === 100);
+          if (fullMetal) {
+            netWeight = fullMetal.weight.toString();
+          }
+        }
+        
         // Debug logging
         console.log(`=== Item ${position} (index ${idx}) ===`);
         console.log('Assigned metal content:', JSON.stringify(metalContent));
@@ -681,6 +707,7 @@
           metalContent.metals.forEach(m => {
             console.log(`    ${m.type}: ${m.percentage}% ${m.weight}kg`);
           });
+          console.log('  Calculated net weight:', netWeight);
         } else if (metalContent.noContent) {
           console.log('  No metal content');
         }
@@ -696,7 +723,7 @@
           unit: unit1,
           unit_price: unitPrice,
           line_total: cleanTotal,
-          net_weight: '',
+          net_weight: netWeight,
           country_of_origin: coo,
           hts_code: hts,
           metal_content: metalContent
