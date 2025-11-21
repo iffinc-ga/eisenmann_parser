@@ -347,18 +347,20 @@
     console.log('Grouped into', groups.length, 'groups');
     
     // Convert groups to metal content objects
-    return groups.map(group => {
-      if (group.noContent) {
-        return {
-          hasMetals: false,
-          metals: [],
-          noContent: true
-        };
-      } else if (group.metals.length > 0) {
+    const result = groups.map(group => {
+      // If group has actual metals, use those (even if it also has noContent flag)
+      if (group.metals.length > 0) {
         return {
           hasMetals: true,
           metals: group.metals,
           noContent: false
+        };
+      } else if (group.noContent) {
+        // Only use noContent if there are no metals
+        return {
+          hasMetals: false,
+          metals: [],
+          noContent: true
         };
       } else {
         return {
@@ -368,6 +370,18 @@
         };
       }
     });
+    
+    console.log('After converting groups:', result.map((r, i) => {
+      if (r.hasMetals) {
+        return `Group ${i}: ${r.metals.length} metals - ${r.metals.map(m => `${m.type} ${m.percentage}%`).join(', ')}`;
+      } else if (r.noContent) {
+        return `Group ${i}: No content`;
+      } else {
+        return `Group ${i}: Empty`;
+      }
+    }));
+    
+    return result;
   }
 
   // Helper to parse metal content from text section
