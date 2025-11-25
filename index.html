@@ -333,6 +333,11 @@
 
   // ========= UPLOAD HANDLERS (unchanged) =========
   uploadBox.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', e => {
+    const f = e.target.files && e.target.files[0];
+    if (f) handleFile(f);
+  });
+
   uploadBox.addEventListener('dragover', e => {
     e.preventDefault();
     uploadBox.classList.add('dragover');
@@ -341,90 +346,205 @@
   uploadBox.addEventListener('drop', e => {
     e.preventDefault();
     uploadBox.classList.remove('dragover');
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      fileInput.files = e.dataTransfer.files;
-      handleFileSelect({ target: fileInput });
-    }
+    const f = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) handleFile(f);
   });
-
-  fileInput.addEventListener('change', handleFileSelect);
-
-  function handleFileSelect(e) {
-    const file = e.target.files[0];
-    if (!file) return;
-    const fname = file.name.replace(/\.pdf$/i, '');
-    uploadedPdfName = fname;
-    parsePDF(file);
-  }
 
   function showAlert(msg, type = 'info') {
     alertBox.textContent = msg;
-    alertBox.className = 'alert';
-    if (type === 'error') alertBox.style.background = '#f8d7da';
-    else if (type === 'success') alertBox.style.background = '#d4edda';
-    else alertBox.style.background = '#d1ecf1';
     alertBox.style.display = 'block';
-    setTimeout(() => { alertBox.style.display = 'none'; }, 5000);
+    if (type === 'error') {
+      alertBox.style.background = '#f8d7da';
+      alertBox.style.color = '#721c24';
+      alertBox.style.border = '1px solid #f5c6cb';
+    } else {
+      alertBox.style.background = '#d4edda';
+      alertBox.style.color = '#155724';
+      alertBox.style.border = '1px solid #c3e6cb';
+    }
+    setTimeout(() => { alertBox.style.display = 'none'; }, 4000);
   }
 
-  // ========= PDF PARSING (unchanged) =========
-  async function parsePDF(file) {
+  // ========= HELPER FUNCTIONS =========
+  function parseFloatSafe(v) {
+    if (v == null) return NaN;
+    const t = String(v).replace(/,/g, '').trim();
+    const n = parseFloat(t);
+    return isNaN(n) ? NaN : n;
+  }
+
+  function isPdfFile(file) {
+    const nameOk = (file.name || '').toLowerCase().endsWith('.pdf');
+    const typeOk = (file.type || '').toLowerCase() === 'application/pdf';
+    return nameOk || typeOk;
+  }
+
+  // Helper to extract all metal content declarations from an invoice block
+  function extractAllMetalContent(text) {
+    const noContentPattern = /Does\s+not\s+contain\s+any\s+aluminum[,\s]+Steel\s+or\s+Copper/gi;
+    const noContentMatches = [...text.matchAll(noContentPattern)];
+    
+    const steelPattern = /Steel\s*content\s*(\d+)\s*%\s*:\s*([\d,\.]+)\s*kg/gi;
+    const copperPattern = /Copper\s*content\s*(\d+)\s*%\s*:\s*([\d,\.]+)\s*kg/gi;
+    const aluminumPattern = /Aluminum\s*content\s*(\d+)\s*%\s*:\s*([\d,\.]+)\s*kg/gi;
+    
+    const steelMatches = [...text.matchAll(steelPattern)];
+    const copperMatches = [...text.matchAll(copperPattern)];
+    const aluminumMatches = [...text.matchAll(aluminumPattern)];
+    
+    const allDeclarations = [];
+    
+    noContentMatches.forEach(m => {
+      allDeclarations.push({ position: m.index, type: 'none', match: m });
+    });
+    
+    steelMatches.forEach(m => {
+      allDeclarations.push({ position: m.index, type: 'steel', match: m });
+    });
+    
+    copperMatches.forEach(m => {
+      allDeclarations.push({ position: m.index, type: 'copper', match: m });
+    });
+    
+    aluminumMatches.forEach(m => {
+      allDeclarations.push({ position: m.index, type: 'aluminum', match: m });
+    });
+    
+    allDeclarations.sort((a, b) => a.position - b.position);
+    
+    let currentGroup = null;
+    const groups = [];
+    
+    allDeclarations.forEach((decl) => {
+      const needNewGroup = !currentGroup || 
+                          decl.type === 'none' ||
+                          currentGroup.lastType === 'none' ||
+                          (decl.position - currentGroup.lastPosition) > 50 ||
+                          (currentGroup.lastType === decl.type && decl.type !== 'none');
+      
+      if (needNewGroup) {
+        currentGroup = {
+          metals: [],
+          noContent: false,
+          lastPosition: decl.position,
+          lastType: decl.type
+        };
+        groups.push(currentGroup);
+      }
+      
+      currentGroup.lastPosition = decl.position;
+      currentGroup.lastType = decl.type;
+      
+      if (decl.type === 'none') {
+        currentGroup.noContent = true;
+      } else {
+        const percentage = parseInt(decl.match[1]);
+        const weight = parseFloat(decl.match[2].replace(',', '.'));
+        
+        const contextStart = Math.max(0, decl.position - 50);
+        const contextEnd = Math.min(text.length, decl.position + 300);
+        const context = text.slice(contextStart, contextEnd);
+        
+        const metal = {
+          type: decl.type.charAt(0).toUpperCase() + decl.type.slice(1),
+          percentage: percentage,
+          weight: weight,
+          unit: 'kg',
+          mixture: !context.includes('No mixture'),
+          countryMeltPour: extractCountryMeltPour(context)
+        };
+        
+        currentGroup.metals.push(metal);
+      }
+    });
+    
+    const result = groups.map(group => {
+      if (group.metals.length > 0) {
+        return { hasMetals: true, metals: group.metals, noContent: false };
+      } else if (group.noContent) {
+        return { hasMetals: false, metals: [], noContent: true };
+      } else {
+        return { hasMetals: false, metals: [], noContent: false };
+      }
+    });
+    
+    return result;
+  }
+
+  function extractCountryMeltPour(text) {
+    let countryMatch = text.match(/Country\s*of\s*Melt\s*&\s*Pour\s*:\s*(\w+)/i);
+    if (!countryMatch) {
+      countryMatch = text.match(/Country\s*of\s*Melt\s*and\s*Pour\s*:\s*(\w+)/i);
+    }
+    if (countryMatch) {
+      const code = countryMatch[1].toUpperCase();
+      const countryMap = {
+        'GER': 'Germany', 'USA': 'United States', 'CHN': 'China', 'JPN': 'Japan',
+        'FRA': 'France', 'ITA': 'Italy', 'UK': 'United Kingdom', 'GB': 'United Kingdom',
+        'DE': 'Germany', 'DEU': 'Germany'
+      };
+      return countryMap[code] || code;
+    }
+    return null;
+  }
+
+  // ========= PDF PARSING =========
+  async function handleFile(file) {
+    if (!isPdfFile(file)) {
+      showAlert('Please upload a PDF file.', 'error');
+      return;
+    }
+    uploadedPdfName = (file.name || '').replace(/\.pdf$/i, '');
+
     uploadSec.style.display = 'none';
     loadingPane.style.display = 'block';
+
     try {
       const arrayBuffer = await file.arrayBuffer();
-      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      const uint8 = new Uint8Array(arrayBuffer);
+      const pdf = await pdfjsLib.getDocument({ data: uint8 }).promise;
+
       let fullText = '';
       for (let i = 1; i <= pdf.numPages; i++) {
-        const page = await pdf.getPage(i);
-        const content = await page.getTextContent();
-        const pageText = content.items.map(item => item.str).join(' ');
-        fullText += pageText + '\n';
+        try {
+          const page = await pdf.getPage(i);
+          const textContent = await page.getTextContent({ includeMarkedContent: true });
+          const items = (textContent && Array.isArray(textContent.items)) ? textContent.items : [];
+          const pageText = items
+            .map(it => (it && typeof it.str === 'string') ? it.str : '')
+            .join(' ');
+          fullText += pageText + '\n';
+        } catch (perPageErr) {
+          console.warn('Failed to read page', i, perPageErr);
+        }
       }
+
+      if (!fullText.trim()) {
+        showAlert('The PDF had no extractable text (might be scanned).', 'error');
+        uploadSec.style.display = 'block';
+        return;
+      }
+
       parseInvoices(fullText);
+
+      if (allData.length) {
+        const invoiceCount = new Set(allData.map(d => d.invoice_number)).size;
+        showAlert(`Parsed ${invoiceCount} invoice(s) and ${allData.length} line item(s).`, 'success');
+        setupInterface();
+      } else {
+        showAlert('No Eisenmann invoice lines were found in the PDF.', 'error');
+        uploadSec.style.display = 'block';
+      }
     } catch (err) {
-      console.error('PDF parse error:', err);
-      showAlert('Failed to parse PDF: ' + err.message, 'error');
+      console.error('PDF processing error:', err);
+      showAlert('Error processing PDF: ' + (err.message || String(err)), 'error');
       uploadSec.style.display = 'block';
+    } finally {
       loadingPane.style.display = 'none';
     }
   }
 
-  function parseInvoices(text) {
-    const lines = text.split('\n').map(l => l.trim()).filter(l => l);
-    const invoicePattern = /Customs Invoice\s+([\w\-\/]+)/gi;
-    const matches = [];
-    let m;
-    while ((m = invoicePattern.exec(text)) !== null) {
-      matches.push({ index: m.index, number: m[1] });
-    }
-
-    if (!matches.length) {
-      showAlert('No "Customs Invoice" headers found.', 'error');
-      uploadSec.style.display = 'block';
-      loadingPane.style.display = 'none';
-      return;
-    }
-
-    allData = [];
-    invoiceOrder = [];
-
-    for (let i = 0; i < matches.length; i++) {
-      const invNum = matches[i].number;
-      invoiceOrder.push(invNum);
-      const startIdx = matches[i].index;
-      const endIdx = (i + 1 < matches.length) ? matches[i + 1].index : text.length;
-      const chunk = text.substring(startIdx, endIdx);
-      parseOneInvoice(chunk, invNum);
-    }
-
-    if (!allData.length) {
-      showAlert('No line items parsed.', 'error');
-      uploadSec.style.display = 'block';
-      loadingPane.style.display = 'none';
-      return;
-    }
-
+  function setupInterface() {
     loadingPane.style.display = 'none';
     controls.style.display = 'flex';
     stats.style.display = 'grid';
@@ -441,110 +561,143 @@
     currentInvoice = invoiceOrder[0];
     invoiceSelect.value = currentInvoice;
     loadInvoiceData();
-    showAlert(`Parsed ${allData.length} line items from ${invoiceOrder.length} invoice(s).`, 'success');
   }
 
-  function parseOneInvoice(chunk, invNum) {
-    const dateMatch = chunk.match(/Date\s*[:]\s*(\d{2}\.\d{2}\.\d{4})/);
-    let invDate = '';
-    if (dateMatch) {
-      const [d, m, y] = dateMatch[1].split('.');
-      invDate = `${m}/${d}/${y}`;
-    }
+  function parseInvoices(text) {
+    allData = [];
+    invoiceOrder = [];
+    text = String(text || '');
 
-    const totalMatch = chunk.match(/Total\s+Value\s+([\d,]+\.\d+)/);
-    const invTotal = totalMatch ? totalMatch[1].replace(/,/g, '') : '';
-
-    const supplierMatch = chunk.match(/Exporter\/Manufacturer\s*[:]\s*([^\n]+)/);
-    const supplier = supplierMatch ? supplierMatch[1].trim() : 'Eisenmann GmbH';
-
-    const posPattern = /(\d+)\s+([\w\d\s\-\/\.\(\)]+?)\s+(\d+[\d\s,]*)\s+(ST|PC|Pcs|EA)\s+([\d,]+\.\d+)\s+([\d,]+\.\d+)\s+([\d,]+\.\d+)\s+DE/g;
-    let match;
-    while ((match = posPattern.exec(chunk)) !== null) {
-      const position = match[1];
-      let partNum = match[2].trim();
-      const quantity = match[3].replace(/\s/g, '');
-      const unit = match[4];
-      const unitPrice = match[5].replace(/,/g, '');
-      const lineTotal = match[6].replace(/,/g, '');
-      const netWeight = match[7].replace(/,/g, '');
-
-      const metalContent = extractMetalContent(chunk, position);
-
-      allData.push({
-        invoice_number: invNum,
-        invoice_date: invDate,
-        invoice_total: invTotal,
-        supplier: supplier,
-        position: position,
-        part_number: partNum,
-        quantity: quantity,
-        unit: unit,
-        unit_price: unitPrice,
-        line_total: lineTotal,
-        net_weight: netWeight,
-        country_of_origin: 'DE',
-        hts_code: '',
-        metal_type: metalContent.metals.length > 0 ? metalContent.metals.map(m => m.type).join(', ') : '',
-        metal_percentage: metalContent.metals.length > 0 ? metalContent.metals[0].percentage : '',
-        metal_weight: metalContent.metals.length > 0 ? metalContent.metals[0].weight : '',
-        metal_country: metalContent.metals.length > 0 ? metalContent.metals[0].country : '',
-        metal_content: metalContent
+    const invoicePattern = /Invoice no\. \/ Date:\s*(\d+)\s*\/\s*(\d{2}\/\d{2}\/\d{4})/g;
+    const headers = [];
+    let m;
+    while ((m = invoicePattern.exec(text)) !== null) {
+      headers.push({
+        index: m.index,
+        invoice_number: m[1],
+        invoice_date: m[2]
       });
     }
-  }
+    headers.push({ index: text.length, invoice_number: null, invoice_date: null });
 
-  function extractMetalContent(text, position) {
-    const result = { hasMetals: false, metals: [], noContent: false };
-    const posStr = 'Pos. ' + position;
-    const posIdx = text.indexOf(posStr);
-    if (posIdx === -1) return result;
+    const linePattern = /(\d{5,6})\s+([A-Z0-9]+)\s+([\d.,]+)\s+([A-Z]+)\s+([\d.,]+)\s+USD\s+([\d.,]+)\s+([A-Z]+)\s+([\d.,]+)/g;
 
-    const nextPosMatch = text.substring(posIdx + 10).match(/Pos\.\s+\d+/);
-    const endIdx = nextPosMatch ? posIdx + 10 + nextPosMatch.index : text.length;
-    const section = text.substring(posIdx, endIdx);
+    for (let i = 0; i < headers.length - 1; i++) {
+      const start = headers[i].index;
+      const end   = headers[i + 1].index;
+      const invNum  = headers[i].invoice_number;
+      const invDate = headers[i].invoice_date;
 
-    if (/Stainless\s+steel/i.test(section) || /Steel\s+Content/i.test(section)) {
-      result.hasMetals = true;
-      const steelMatch = section.match(/Steel\s+Content[:\s]*([\d,]+\.?\d*)\s*kg[^\d]*([\d,]+\.?\d*)?\s*%/i);
-      if (steelMatch) {
-        const weight = steelMatch[1].replace(/,/g, '');
-        const percent = steelMatch[2] ? steelMatch[2].replace(/,/g, '') : '100';
-        const countryMatch = section.match(/Country\s+of\s+Melting\s*[:\s]*([A-Z]{2})/i);
-        const country = countryMatch ? countryMatch[1] : '';
-        result.metals.push({ type: 'Steel', weight: weight, percentage: percent, country: country });
+      if (!invNum) continue;
+      const block = text.slice(start, end);
+
+      let invoiceTotal = '';
+      const totalMatch = block.match(/Net\s*amount\s+([\d.,]+)/i);
+      if (totalMatch) invoiceTotal = totalMatch[1].replace(/,/g, '');
+
+      const lineMatches = [...block.matchAll(linePattern)];
+      if (!lineMatches.length) {
+        allData.push({
+          invoice_number: invNum,
+          invoice_date: invDate,
+          invoice_total: invoiceTotal,
+          supplier: 'Eisenmann GmbH',
+          position: '',
+          part_number: '',
+          quantity: '',
+          unit: '',
+          unit_price: '',
+          line_total: '',
+          net_weight: '',
+          country_of_origin: '',
+          hts_code: '',
+          metal_type: '',
+          metal_percentage: '',
+          metal_weight: '',
+          metal_country: '',
+          metal_content: { hasMetals: false, metals: [], noContent: false }
+        });
+        continue;
       }
+
+      const metalContents = extractAllMetalContent(block);
+
+      lineMatches.forEach((lm, idx) => {
+        const position = lm[1];
+        const material = lm[2];
+        const qty1     = (lm[3] || '').replace(/,/g, '');
+        const unit1    = lm[4];
+        const unitPrice = (lm[5] || '').replace(/,/g, '');
+        const rawTotal  = lm[8] || '';
+
+        const cleanTotal = rawTotal
+          .replace(/[^0-9.,]/g, '')
+          .replace(/,/g, '');
+
+        const itemStart = lm.index || 0;
+        const itemEnd   = (idx + 1 < lineMatches.length)
+          ? (lineMatches[idx + 1].index || block.length)
+          : block.length;
+        const itemSection = block.slice(itemStart, itemEnd);
+
+        let hts = '';
+        const htsMatch = itemSection.match(/Commodity Code\s*\/\s*Import Code Number:\s*([0-9]+)/i);
+        if (htsMatch) hts = htsMatch[1];
+
+        let coo = '';
+        const cooMatch = itemSection.match(/Country of origin:\s*([A-Za-z ]+)/i);
+        if (cooMatch) coo = cooMatch[1].trim();
+        if (coo.toLowerCase().includes('germany')) coo = 'DE';
+
+        const metalContent = metalContents[idx] || { hasMetals: false, metals: [], noContent: false };
+        
+        let metalType = '';
+        let metalPercentage = '';
+        let metalWeight = '';
+        let metalCountry = '';
+        
+        if (metalContent.noContent) {
+          metalType = 'None';
+        } else if (metalContent.hasMetals && metalContent.metals.length > 0) {
+          const metal = metalContent.metals[0];
+          metalType = metal.type;
+          metalPercentage = metal.percentage;
+          metalWeight = metal.weight;
+          metalCountry = metal.countryMeltPour || '';
+        }
+        
+        let netWeight = '';
+        if (metalContent.hasMetals && metalContent.metals.length > 0) {
+          const fullMetal = metalContent.metals.find(m => m.percentage === 100);
+          if (fullMetal) {
+            netWeight = fullMetal.weight.toString();
+          }
+        }
+
+        allData.push({
+          invoice_number: invNum,
+          invoice_date: invDate,
+          invoice_total: invoiceTotal,
+          supplier: 'Eisenmann GmbH',
+          position: position,
+          part_number: material,
+          quantity: qty1,
+          unit: unit1,
+          unit_price: unitPrice,
+          line_total: cleanTotal,
+          net_weight: netWeight,
+          country_of_origin: coo,
+          hts_code: hts,
+          metal_type: metalType,
+          metal_percentage: metalPercentage,
+          metal_weight: metalWeight,
+          metal_country: metalCountry,
+          metal_content: metalContent
+        });
+      });
     }
 
-    if (/Aluminum/i.test(section)) {
-      const alumMatch = section.match(/Aluminum\s+Content[:\s]*([\d,]+\.?\d*)\s*kg[^\d]*([\d,]+\.?\d*)?\s*%/i);
-      if (alumMatch) {
-        result.hasMetals = true;
-        const weight = alumMatch[1].replace(/,/g, '');
-        const percent = alumMatch[2] ? alumMatch[2].replace(/,/g, '') : '100';
-        const countryMatch = section.match(/Country\s+of\s+Melting\s*[:\s]*([A-Z]{2})/i);
-        const country = countryMatch ? countryMatch[1] : '';
-        result.metals.push({ type: 'Aluminum', weight: weight, percentage: percent, country: country });
-      }
-    }
-
-    if (/Copper/i.test(section)) {
-      const copperMatch = section.match(/Copper\s+Content[:\s]*([\d,]+\.?\d*)\s*kg[^\d]*([\d,]+\.?\d*)?\s*%/i);
-      if (copperMatch) {
-        result.hasMetals = true;
-        const weight = copperMatch[1].replace(/,/g, '');
-        const percent = copperMatch[2] ? copperMatch[2].replace(/,/g, '') : '100';
-        const countryMatch = section.match(/Country\s+of\s+Melting\s*[:\s]*([A-Z]{2})/i);
-        const country = countryMatch ? countryMatch[1] : '';
-        result.metals.push({ type: 'Copper', weight: weight, percentage: percent, country: country });
-      }
-    }
-
-    if (!result.hasMetals && /No\s+(steel|aluminum|copper)\s+content/i.test(section)) {
-      result.noContent = true;
-    }
-
-    return result;
+    invoiceOrder = [...new Set(allData.map(r => r.invoice_number))];
   }
 
   // ========= TABLE RENDERING (unchanged) =========
@@ -948,15 +1101,16 @@
             metalRow['TariffNumber'] = '99030133';
           }
           
-          metalRow['NetWeight'] = metal.weight || '';
-          metalRow['Quantity'] = metal.weight || '';
-          metalRow['Secondary Quantity1'] = metal.weight || '';
+          const metalWeight = String(metal.weight || '');
+          metalRow['NetWeight'] = metalWeight;
+          metalRow['Quantity'] = metalWeight;
+          metalRow['Secondary Quantity1'] = metalWeight;
           metalRow['Secondaryunitofmeasure1'] = 'KG';
           metalRow['ItemTotal'] = '0';
           metalRow['UnitPrice'] = '0';
           
-          if (metal.country) {
-            metalRow['CountryOfOrigin'] = metal.country;
+          if (metal.countryMeltPour) {
+            metalRow['CountryOfOrigin'] = metal.countryMeltPour;
           }
           
           exportRows.push(metalRow);
