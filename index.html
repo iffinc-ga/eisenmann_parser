@@ -95,7 +95,9 @@
     <span id="dbStatus" class="db-status loading">DB: not loaded</span>
     <span id="dbInfo">Will try to load updated_eisenmann_db.xlsx from GitHub...</span>
     <button id="retryDbBtn" class="db-btn">Retry DB</button>
+    <button id="uploadDbBtn" class="db-btn">Upload DB File</button>
     <button id="offlineDbBtn" class="db-btn">Work offline</button>
+    <input type="file" id="dbFileInput" accept=".xlsx" style="display:none" />
   </div>
 
   <div class="upload-section" id="uploadSection">
@@ -228,6 +230,8 @@
   const dbStatusEl = document.getElementById('dbStatus');
   const dbInfo = document.getElementById('dbInfo');
   const retryDbBtn = document.getElementById('retryDbBtn');
+  const uploadDbBtn = document.getElementById('uploadDbBtn');
+  const dbFileInput = document.getElementById('dbFileInput');
   const offlineDbBtn = document.getElementById('offlineDbBtn');
 
   function setDbBanner(state, msg, info) {
@@ -255,6 +259,8 @@
   }
 
   async function hydrateDbFromWorkbook(workbook) {
+    console.log('[DB] Available sheet names:', workbook.SheetNames);
+    
     // Load Eisenmann sheet
     const eisenmannSheet = workbook.SheetNames.find(n => n.toLowerCase().includes('eisenmann')) || workbook.SheetNames[0];
     eisenmannDb = XLSX.utils.sheet_to_json(workbook.Sheets[eisenmannSheet], { defval: '' });
@@ -274,11 +280,23 @@
       console.log(`[DB] Loaded ${midSheet}: ${supplierMidDb.length} rows`);
     }
 
-    // Load Steel_Alum_list sheet if exists
-    const steelAlumSheet = workbook.SheetNames.find(n => n.toLowerCase().includes('steel_alum') || n.toLowerCase().includes('steel alum'));
+    // Load Steel_Alum_list sheet - try multiple name patterns
+    const steelAlumSheet = workbook.SheetNames.find(n => {
+      const lower = n.toLowerCase().replace(/[_\s]/g, '');
+      return lower.includes('steelalum') || n === 'Steel_Alum_list';
+    });
+    
+    console.log('[DB] Looking for Steel_Alum_list sheet...');
+    console.log('[DB] Found sheet name:', steelAlumSheet);
+    
     if (steelAlumSheet) {
       steelAlumListDb = XLSX.utils.sheet_to_json(workbook.Sheets[steelAlumSheet], { defval: '' });
       console.log(`[DB] Loaded ${steelAlumSheet}: ${steelAlumListDb.length} rows`);
+      if (steelAlumListDb.length > 0) {
+        console.log('[DB] Steel_Alum_list columns:', Object.keys(steelAlumListDb[0]));
+      }
+    } else {
+      console.warn('[DB] Steel_Alum_list sheet not found in workbook!');
     }
 
     setDbBanner('loaded', 'DB: Loaded successfully', `${eisenmannDb.length} parts`);
@@ -297,6 +315,26 @@
   }
 
   retryDbBtn.addEventListener('click', tryLoadDbFromGitHub);
+  
+  uploadDbBtn.addEventListener('click', () => {
+    dbFileInput.click();
+  });
+  
+  dbFileInput.addEventListener('change', async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    
+    try {
+      setDbBanner('loading', 'DB: Loading from file...', '');
+      const arrayBuffer = await file.arrayBuffer();
+      const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+      await hydrateDbFromWorkbook(workbook);
+    } catch (err) {
+      console.error('[DB] File load failed:', err);
+      setDbBanner('offline', 'DB: Failed to load file', err.message);
+    }
+  });
+  
   offlineDbBtn.addEventListener('click', () => {
     setDbBanner('offline', 'DB: Working offline', 'Database features disabled');
   });
