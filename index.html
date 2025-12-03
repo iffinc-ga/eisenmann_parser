@@ -204,6 +204,7 @@
   let eisenmannDb = [];
   let htsCodesDb = [];
   let supplierMidDb = [];
+  let steelAlumListDb = [];
 
   const uploadBox   = document.getElementById('uploadBox');
   const fileInput   = document.getElementById('fileInput');
@@ -273,6 +274,13 @@
       console.log(`[DB] Loaded ${midSheet}: ${supplierMidDb.length} rows`);
     }
 
+    // Load Steel_Alum_list sheet if exists
+    const steelAlumSheet = workbook.SheetNames.find(n => n.toLowerCase().includes('steel_alum') || n.toLowerCase().includes('steel alum'));
+    if (steelAlumSheet) {
+      steelAlumListDb = XLSX.utils.sheet_to_json(workbook.Sheets[steelAlumSheet], { defval: '' });
+      console.log(`[DB] Loaded ${steelAlumSheet}: ${steelAlumListDb.length} rows`);
+    }
+
     setDbBanner('loaded', 'DB: Loaded successfully', `${eisenmannDb.length} parts`);
   }
 
@@ -300,15 +308,34 @@
   function lookupTariffsByPart(partNumber) {
     if (!eisenmannDb.length) return [];
     const upper = String(partNumber).toUpperCase().trim();
-    const row = eisenmannDb.find(r => String(r['Part Number'] || '').toUpperCase().trim() === upper);
+    // Try both column name formats for compatibility
+    const row = eisenmannDb.find(r => 
+      String(r['Part Number'] || r['PRIMARY PART NUM'] || '').toUpperCase().trim() === upper
+    );
     if (!row) return [];
     
     const tariffs = [];
+    // Check both old and new column name formats
+    const tariffColumns = [
+      'Tariff1', 'Tariff2', 'Tariff3', 'Tariff4', 'Tariff5',
+      'TARIFF NUM', 'TARIFF NUM_1', 'TARIFF NUM_10', 'TARIFF NUM_19', 'TARIFF NUM_28'
+    ];
+    
+    // Try old format first (Tariff1-5)
     for (let i = 1; i <= 5; i++) {
       const col = `Tariff${i}`;
       const val = String(row[col] || '').trim();
       if (val && val !== '0') tariffs.push(val);
     }
+    
+    // If no tariffs found, try new format (TARIFF NUM, TARIFF NUM_1, TARIFF NUM_10)
+    if (tariffs.length === 0) {
+      ['TARIFF NUM', 'TARIFF NUM_1', 'TARIFF NUM_10'].forEach(col => {
+        const val = String(row[col] || '').trim();
+        if (val && val !== '0' && val !== 'nan') tariffs.push(val);
+      });
+    }
+    
     return tariffs;
   }
 
@@ -336,7 +363,7 @@
     if (!tariffs || !Array.isArray(tariffs) || tariffs.length === 0) return 'ALL STEEL GENERIC';
 
     const allSteelRows = eisenmannDb.filter(row => {
-      const p = String(row['Part Number'] || '').toUpperCase();
+      const p = String(row['Part Number'] || row['PRIMARY PART NUM'] || '').toUpperCase();
       return p.startsWith('ALL STEEL');
     });
     if (!allSteelRows.length) return 'ALL STEEL GENERIC';
@@ -351,20 +378,27 @@
       if (normTariff.startsWith('98') || normTariff.startsWith('99')) continue;
       
       let match = allSteelRows.find(row => {
-        const partName = String(row['Part Number'] || '').toUpperCase();
+        const partName = String(row['Part Number'] || row['PRIMARY PART NUM'] || '').toUpperCase();
         // Skip generic parts - only match specific PRIMARY parts
         if (partName.includes('GENERIC')) return false;
         
         const rowTariffs = [];
+        // Try old format (Tariff1-5)
         for (let i = 1; i <= 5; i++) {
           const t = String(row[`Tariff${i}`] || '').trim();
           if (t && t !== '0') rowTariffs.push(t);
         }
+        // Try new format (TARIFF NUM, TARIFF NUM_1, TARIFF NUM_10)
+        ['TARIFF NUM', 'TARIFF NUM_1', 'TARIFF NUM_10'].forEach(col => {
+          const t = String(row[col] || '').trim();
+          if (t && t !== '0' && t !== 'nan') rowTariffs.push(t);
+        });
+        
         return rowTariffs.includes(normTariff);
       });
 
       if (match) {
-        return String(match['Part Number'] || 'ALL STEEL GENERIC');
+        return String(match['Part Number'] || match['PRIMARY PART NUM'] || 'ALL STEEL GENERIC');
       }
     }
 
@@ -416,7 +450,7 @@
     if (!tariffs || !Array.isArray(tariffs) || tariffs.length === 0) return 'ALL COPPER GENERIC';
 
     const allCopperRows = eisenmannDb.filter(row => {
-      const p = String(row['Part Number'] || '').toUpperCase();
+      const p = String(row['Part Number'] || row['PRIMARY PART NUM'] || '').toUpperCase();
       return p.startsWith('ALL COPPER');
     });
     if (!allCopperRows.length) return 'ALL COPPER GENERIC';
@@ -428,24 +462,31 @@
       
       let match = allCopperRows.find(row => {
         const rowTariffs = [];
+        // Try old format (Tariff1-5)
         for (let i = 1; i <= 5; i++) {
           const t = String(row[`Tariff${i}`] || '').trim();
           if (t && t !== '0') rowTariffs.push(t);
         }
+        // Try new format (TARIFF NUM, TARIFF NUM_1, TARIFF NUM_10)
+        ['TARIFF NUM', 'TARIFF NUM_1', 'TARIFF NUM_10'].forEach(col => {
+          const t = String(row[col] || '').trim();
+          if (t && t !== '0' && t !== 'nan') rowTariffs.push(t);
+        });
+        
         return rowTariffs.includes(normTariff);
       });
 
       if (match) {
-        return String(match['Part Number'] || 'ALL COPPER GENERIC');
+        return String(match['Part Number'] || match['PRIMARY PART NUM'] || 'ALL COPPER GENERIC');
       }
     }
 
     // Fallback to generic
     const generic = allCopperRows.find(row =>
-      String(row['Part Number'] || '').toUpperCase().includes('ALL COPPER GENERIC')
+      String(row['Part Number'] || row['PRIMARY PART NUM'] || '').toUpperCase().includes('ALL COPPER GENERIC')
     );
-    if (generic) return String(generic['Part Number']);
-    return String(allCopperRows[0]['Part Number'] || 'ALL COPPER GENERIC');
+    if (generic) return String(generic['Part Number'] || generic['PRIMARY PART NUM']);
+    return String(allCopperRows[0]['Part Number'] || allCopperRows[0]['PRIMARY PART NUM'] || 'ALL COPPER GENERIC');
   }
 
   function getAllAluminumPartForTariff(tariffs) {
@@ -453,7 +494,7 @@
     if (!tariffs || !Array.isArray(tariffs) || tariffs.length === 0) return 'ALL ALUMINUM GENERIC';
 
     const allAlumRows = eisenmannDb.filter(row => {
-      const p = String(row['Part Number'] || '').toUpperCase();
+      const p = String(row['Part Number'] || row['PRIMARY PART NUM'] || '').toUpperCase();
       return p.startsWith('ALL ALUMINUM') || p.startsWith('ALL ALUM');
     });
     if (!allAlumRows.length) return 'ALL ALUMINUM GENERIC';
@@ -468,20 +509,27 @@
       if (normTariff.startsWith('98') || normTariff.startsWith('99')) continue;
       
       let match = allAlumRows.find(row => {
-        const partName = String(row['Part Number'] || '').toUpperCase();
+        const partName = String(row['Part Number'] || row['PRIMARY PART NUM'] || '').toUpperCase();
         // Skip generic parts - only match specific PRIMARY parts
         if (partName.includes('GENERIC')) return false;
         
         const rowTariffs = [];
+        // Try old format (Tariff1-5)
         for (let i = 1; i <= 5; i++) {
           const t = String(row[`Tariff${i}`] || '').trim();
           if (t && t !== '0') rowTariffs.push(t);
         }
+        // Try new format (TARIFF NUM, TARIFF NUM_1, TARIFF NUM_10)
+        ['TARIFF NUM', 'TARIFF NUM_1', 'TARIFF NUM_10'].forEach(col => {
+          const t = String(row[col] || '').trim();
+          if (t && t !== '0' && t !== 'nan') rowTariffs.push(t);
+        });
+        
         return rowTariffs.includes(normTariff);
       });
 
       if (match) {
-        return String(match['Part Number'] || 'ALL ALUMINUM GENERIC');
+        return String(match['Part Number'] || match['PRIMARY PART NUM'] || 'ALL ALUMINUM GENERIC');
       }
     }
 
