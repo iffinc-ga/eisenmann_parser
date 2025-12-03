@@ -331,10 +331,9 @@
     return row ? String(row['MID'] || '').trim() : '';
   }
 
-  function getAllSteelPartForTariff(mainTariff) {
+  function getAllSteelPartForTariff(tariffs) {
     if (!eisenmannDb.length) return 'ALL STEEL GENERIC';
-    const normTariff = String(mainTariff || '').trim();
-    if (!normTariff) return 'ALL STEEL GENERIC';
+    if (!tariffs || !Array.isArray(tariffs) || tariffs.length === 0) return 'ALL STEEL GENERIC';
 
     const allSteelRows = eisenmannDb.filter(row => {
       const p = String(row['Part Number'] || '').toUpperCase();
@@ -342,51 +341,69 @@
     });
     if (!allSteelRows.length) return 'ALL STEEL GENERIC';
 
-    // Try to find a match with specific ALL STEEL PRIMARY parts
-    let match = allSteelRows.find(row => {
-      const partName = String(row['Part Number'] || '').toUpperCase();
-      // Skip generic parts - only match specific PRIMARY parts
-      if (partName.includes('GENERIC')) return false;
+    // Try to find a match with specific ALL STEEL PRIMARY parts using any of the tariffs
+    // BUT skip exemption codes (starting with 98 or 99)
+    for (const tariff of tariffs) {
+      const normTariff = String(tariff || '').trim();
+      if (!normTariff) continue;
       
-      const tariffs = [];
-      for (let i = 1; i <= 5; i++) {
-        const t = String(row[`Tariff${i}`] || '').trim();
-        if (t && t !== '0') tariffs.push(t);
-      }
-      return tariffs.includes(normTariff);
-    });
+      // Skip exemption codes - only check actual HTS codes
+      if (normTariff.startsWith('98') || normTariff.startsWith('99')) continue;
+      
+      let match = allSteelRows.find(row => {
+        const partName = String(row['Part Number'] || '').toUpperCase();
+        // Skip generic parts - only match specific PRIMARY parts
+        if (partName.includes('GENERIC')) return false;
+        
+        const rowTariffs = [];
+        for (let i = 1; i <= 5; i++) {
+          const t = String(row[`Tariff${i}`] || '').trim();
+          if (t && t !== '0') rowTariffs.push(t);
+        }
+        return rowTariffs.includes(normTariff);
+      });
 
-    if (match) {
-      return String(match['Part Number'] || 'ALL STEEL GENERIC');
+      if (match) {
+        return String(match['Part Number'] || 'ALL STEEL GENERIC');
+      }
     }
 
-    // No specific match found - check Steel_Alum_list to determine which generic to use
+    // No specific match found - check Steel_Alum_list with ALL tariffs to determine which generic to use
+    // Check ALL tariffs including exemption codes
     if (steelAlumListDb.length > 0) {
-      // Normalize tariff for comparison (remove leading zeros, convert to number)
-      const normTariffNum = normTariff.replace(/^0+/, '');
-      
-      // Check if tariff is in Steel M column
-      const inSteelM = steelAlumListDb.some(row => {
-        const steelM = String(row['Steel M'] || '').trim();
-        if (!steelM) return false;
-        const normalized = steelM.replace(/^0+/, '').replace(/\.0+$/, '');
-        return normalized === normTariffNum || steelM === normTariff;
-      });
-      
-      if (inSteelM) {
-        return 'ALL STEEL GENERIC - M';
-      }
-      
-      // Check if tariff is in Steel N column
-      const inSteelN = steelAlumListDb.some(row => {
-        const steelN = String(row['Steel N'] || '').trim();
-        if (!steelN) return false;
-        const normalized = steelN.replace(/^0+/, '');
-        return normalized === normTariffNum || steelN === normTariff;
-      });
-      
-      if (inSteelN) {
-        return 'ALL STEEL GENERIC - N';
+      for (const tariff of tariffs) {
+        const normTariff = String(tariff || '').trim();
+        if (!normTariff) continue;
+        
+        // Use first 8 digits for comparison
+        const mainTariffFirst8 = normTariff.substring(0, 8);
+        
+        // Check if tariff is in Steel M column
+        const inSteelM = steelAlumListDb.some(row => {
+          const steelM = String(row['Steel M'] || '').trim();
+          if (!steelM) return false;
+          // Remove decimal and get first 8 digits
+          const steelMClean = steelM.replace(/\.0+$/, '');
+          const steelMFirst8 = steelMClean.substring(0, 8);
+          return steelMFirst8 === mainTariffFirst8;
+        });
+        
+        if (inSteelM) {
+          return 'ALL STEEL GENERIC - M';
+        }
+        
+        // Check if tariff is in Steel N column
+        const inSteelN = steelAlumListDb.some(row => {
+          const steelN = String(row['Steel N'] || '').trim();
+          if (!steelN) return false;
+          // Get first 8 digits
+          const steelNFirst8 = steelN.substring(0, 8);
+          return steelNFirst8 === mainTariffFirst8;
+        });
+        
+        if (inSteelN) {
+          return 'ALL STEEL GENERIC - N';
+        }
       }
     }
 
@@ -394,10 +411,9 @@
     return 'ALL STEEL GENERIC';
   }
 
-  function getAllCopperPartForTariff(mainTariff) {
+  function getAllCopperPartForTariff(tariffs) {
     if (!eisenmannDb.length) return 'ALL COPPER GENERIC';
-    const normTariff = String(mainTariff || '').trim();
-    if (!normTariff) return 'ALL COPPER GENERIC';
+    if (!tariffs || !Array.isArray(tariffs) || tariffs.length === 0) return 'ALL COPPER GENERIC';
 
     const allCopperRows = eisenmannDb.filter(row => {
       const p = String(row['Part Number'] || '').toUpperCase();
@@ -405,19 +421,26 @@
     });
     if (!allCopperRows.length) return 'ALL COPPER GENERIC';
 
-    let match = allCopperRows.find(row => {
-      const tariffs = [];
-      for (let i = 1; i <= 5; i++) {
-        const t = String(row[`Tariff${i}`] || '').trim();
-        if (t && t !== '0') tariffs.push(t);
-      }
-      return tariffs.includes(normTariff);
-    });
+    // Try to find a match with any of the tariffs
+    for (const tariff of tariffs) {
+      const normTariff = String(tariff || '').trim();
+      if (!normTariff) continue;
+      
+      let match = allCopperRows.find(row => {
+        const rowTariffs = [];
+        for (let i = 1; i <= 5; i++) {
+          const t = String(row[`Tariff${i}`] || '').trim();
+          if (t && t !== '0') rowTariffs.push(t);
+        }
+        return rowTariffs.includes(normTariff);
+      });
 
-    if (match) {
-      return String(match['Part Number'] || 'ALL COPPER GENERIC');
+      if (match) {
+        return String(match['Part Number'] || 'ALL COPPER GENERIC');
+      }
     }
 
+    // Fallback to generic
     const generic = allCopperRows.find(row =>
       String(row['Part Number'] || '').toUpperCase().includes('ALL COPPER GENERIC')
     );
@@ -425,10 +448,9 @@
     return String(allCopperRows[0]['Part Number'] || 'ALL COPPER GENERIC');
   }
 
-  function getAllAluminumPartForTariff(mainTariff) {
+  function getAllAluminumPartForTariff(tariffs) {
     if (!eisenmannDb.length) return 'ALL ALUMINUM GENERIC';
-    const normTariff = String(mainTariff || '').trim();
-    if (!normTariff) return 'ALL ALUMINUM GENERIC';
+    if (!tariffs || !Array.isArray(tariffs) || tariffs.length === 0) return 'ALL ALUMINUM GENERIC';
 
     const allAlumRows = eisenmannDb.filter(row => {
       const p = String(row['Part Number'] || '').toUpperCase();
@@ -436,51 +458,70 @@
     });
     if (!allAlumRows.length) return 'ALL ALUMINUM GENERIC';
 
-    // Try to find a match with specific ALL ALUMINUM PRIMARY parts
-    let match = allAlumRows.find(row => {
-      const partName = String(row['Part Number'] || '').toUpperCase();
-      // Skip generic parts - only match specific PRIMARY parts
-      if (partName.includes('GENERIC')) return false;
+    // Try to find a match with specific ALL ALUMINUM PRIMARY parts using any of the tariffs
+    // BUT skip exemption codes (starting with 98 or 99)
+    for (const tariff of tariffs) {
+      const normTariff = String(tariff || '').trim();
+      if (!normTariff) continue;
       
-      const tariffs = [];
-      for (let i = 1; i <= 5; i++) {
-        const t = String(row[`Tariff${i}`] || '').trim();
-        if (t && t !== '0') tariffs.push(t);
-      }
-      return tariffs.includes(normTariff);
-    });
+      // Skip exemption codes - only check actual HTS codes
+      if (normTariff.startsWith('98') || normTariff.startsWith('99')) continue;
+      
+      let match = allAlumRows.find(row => {
+        const partName = String(row['Part Number'] || '').toUpperCase();
+        // Skip generic parts - only match specific PRIMARY parts
+        if (partName.includes('GENERIC')) return false;
+        
+        const rowTariffs = [];
+        for (let i = 1; i <= 5; i++) {
+          const t = String(row[`Tariff${i}`] || '').trim();
+          if (t && t !== '0') rowTariffs.push(t);
+        }
+        return rowTariffs.includes(normTariff);
+      });
 
-    if (match) {
-      return String(match['Part Number'] || 'ALL ALUMINUM GENERIC');
+      if (match) {
+        return String(match['Part Number'] || 'ALL ALUMINUM GENERIC');
+      }
     }
 
-    // No specific match found - check Steel_Alum_list to determine which generic to use
+    // No specific match found - check Steel_Alum_list with ALL tariffs to determine which generic to use
+    // Check ALL tariffs including exemption codes
     if (steelAlumListDb.length > 0) {
-      // Normalize tariff for comparison (remove leading zeros)
-      const normTariffNum = normTariff.replace(/^0+/, '');
-      
-      // Check if tariff is in Aluminum List K column
-      const inAlumK = steelAlumListDb.some(row => {
-        const alumK = String(row['Aluminum List K'] || '').trim();
-        if (!alumK) return false;
-        const normalized = alumK.replace(/^0+/, '').replace(/\.0+$/, '');
-        return normalized === normTariffNum || alumK === normTariff;
-      });
-      
-      if (inAlumK) {
-        return 'ALL ALUMINUM GENERIC - K';
-      }
-      
-      // Check if tariff is in Aluminum List J column
-      const inAlumJ = steelAlumListDb.some(row => {
-        const alumJ = String(row['Aluminum List J'] || '').trim();
-        if (!alumJ) return false;
-        const normalized = alumJ.replace(/^0+/, '').replace(/\.0+$/, '');
-        return normalized === normTariffNum || alumJ === normTariff;
-      });
-      
-      if (inAlumJ) {
-        return 'ALL ALUMINUM GENERIC - J';
+      for (const tariff of tariffs) {
+        const normTariff = String(tariff || '').trim();
+        if (!normTariff) continue;
+        
+        // Use first 8 digits for comparison
+        const mainTariffFirst8 = normTariff.substring(0, 8);
+        
+        // Check if tariff is in Aluminum List K column
+        const inAlumK = steelAlumListDb.some(row => {
+          const alumK = String(row['Aluminum List K'] || '').trim();
+          if (!alumK) return false;
+          // Remove decimal and get first 8 digits
+          const alumKClean = alumK.replace(/\.0+$/, '');
+          const alumKFirst8 = alumKClean.substring(0, 8);
+          return alumKFirst8 === mainTariffFirst8;
+        });
+        
+        if (inAlumK) {
+          return 'ALL ALUMINUM GENERIC - K';
+        }
+        
+        // Check if tariff is in Aluminum List J column
+        const inAlumJ = steelAlumListDb.some(row => {
+          const alumJ = String(row['Aluminum List J'] || '').trim();
+          if (!alumJ) return false;
+          // Remove decimal and get first 8 digits
+          const alumJClean = alumJ.replace(/\.0+$/, '');
+          const alumJFirst8 = alumJClean.substring(0, 8);
+          return alumJFirst8 === mainTariffFirst8;
+        });
+        
+        if (inAlumJ) {
+          return 'ALL ALUMINUM GENERIC - J';
+        }
       }
     }
 
@@ -1107,16 +1148,15 @@
       if (is100PercentMetal) {
         // Use ALL STEEL/COPPER/ALUMINUM part number based on base tariff
         const tariffs = lookupTariffsByPart(item.part_number);
-        const mainTariff = tariffs.length > 0 ? tariffs[0] : '';
         const metal = metalContent.metals[0];
         
         let allMetalPart = '';
         if (metal.type === 'Steel') {
-          allMetalPart = getAllSteelPartForTariff(mainTariff);
+          allMetalPart = getAllSteelPartForTariff(tariffs);
         } else if (metal.type === 'Copper') {
-          allMetalPart = getAllCopperPartForTariff(mainTariff);
+          allMetalPart = getAllCopperPartForTariff(tariffs);
         } else if (metal.type === 'Aluminum') {
-          allMetalPart = getAllAluminumPartForTariff(mainTariff);
+          allMetalPart = getAllAluminumPartForTariff(tariffs);
         }
         
         // Keep original part number for BuyerPartNumber, use ALL METAL part for SupplierPartNumber
