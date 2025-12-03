@@ -359,6 +359,9 @@
   }
 
   function getAllSteelPartForTariff(tariffs) {
+    console.log('[getAllSteelPartForTariff] Called with tariffs:', tariffs);
+    console.log('[getAllSteelPartForTariff] steelAlumListDb length:', steelAlumListDb.length);
+    
     if (!eisenmannDb.length) return 'ALL STEEL GENERIC';
     if (!tariffs || !Array.isArray(tariffs) || tariffs.length === 0) return 'ALL STEEL GENERIC';
 
@@ -366,17 +369,24 @@
       const p = String(row['Part Number'] || row['PRIMARY PART NUM'] || '').toUpperCase();
       return p.startsWith('ALL STEEL');
     });
+    console.log('[getAllSteelPartForTariff] Found ALL STEEL parts:', allSteelRows.length);
+    
     if (!allSteelRows.length) return 'ALL STEEL GENERIC';
 
     // Try to find a match with specific ALL STEEL PRIMARY parts using any of the tariffs
     // BUT skip exemption codes (starting with 98 or 99)
+    console.log('[getAllSteelPartForTariff] Step 1: Checking for specific PRIMARY matches...');
     for (const tariff of tariffs) {
       const normTariff = String(tariff || '').trim();
       if (!normTariff) continue;
       
       // Skip exemption codes - only check actual HTS codes
-      if (normTariff.startsWith('98') || normTariff.startsWith('99')) continue;
+      if (normTariff.startsWith('98') || normTariff.startsWith('99')) {
+        console.log('[getAllSteelPartForTariff] Skipping exemption code:', normTariff);
+        continue;
+      }
       
+      console.log('[getAllSteelPartForTariff] Checking tariff:', normTariff);
       let match = allSteelRows.find(row => {
         const partName = String(row['Part Number'] || row['PRIMARY PART NUM'] || '').toUpperCase();
         // Skip generic parts - only match specific PRIMARY parts
@@ -398,19 +408,30 @@
       });
 
       if (match) {
-        return String(match['Part Number'] || match['PRIMARY PART NUM'] || 'ALL STEEL GENERIC');
+        const result = String(match['Part Number'] || match['PRIMARY PART NUM'] || 'ALL STEEL GENERIC');
+        console.log('[getAllSteelPartForTariff] Found specific match:', result);
+        return result;
       }
     }
+    console.log('[getAllSteelPartForTariff] No specific PRIMARY matches found');
 
     // No specific match found - check Steel_Alum_list with ALL tariffs to determine which generic to use
     // Check ALL tariffs including exemption codes
+    console.log('[getAllSteelPartForTariff] Step 2: Checking Steel_Alum_list...');
     if (steelAlumListDb.length > 0) {
+      console.log('[getAllSteelPartForTariff] Steel_Alum_list has', steelAlumListDb.length, 'rows');
+      // Log the first row to see column names
+      if (steelAlumListDb.length > 0) {
+        console.log('[getAllSteelPartForTariff] First row columns:', Object.keys(steelAlumListDb[0]));
+      }
+      
       for (const tariff of tariffs) {
         const normTariff = String(tariff || '').trim();
         if (!normTariff) continue;
         
         // Use first 8 digits for comparison
         const mainTariffFirst8 = normTariff.substring(0, 8);
+        console.log('[getAllSteelPartForTariff] Checking tariff:', normTariff, '(first 8:', mainTariffFirst8 + ')');
         
         // Check if tariff is in Steel M column
         const inSteelM = steelAlumListDb.some(row => {
@@ -423,6 +444,7 @@
         });
         
         if (inSteelM) {
+          console.log('[getAllSteelPartForTariff] Matched Steel M! Returning ALL STEEL GENERIC - M');
           return 'ALL STEEL GENERIC - M';
         }
         
@@ -436,12 +458,18 @@
         });
         
         if (inSteelN) {
+          console.log('[getAllSteelPartForTariff] Matched Steel N! Returning ALL STEEL GENERIC - N');
           return 'ALL STEEL GENERIC - N';
         }
+        
+        console.log('[getAllSteelPartForTariff] No match in Steel M or Steel N for this tariff');
       }
+    } else {
+      console.log('[getAllSteelPartForTariff] Steel_Alum_list is empty!');
     }
 
     // Fallback to generic (no suffix)
+    console.log('[getAllSteelPartForTariff] Fallback: Returning ALL STEEL GENERIC');
     return 'ALL STEEL GENERIC';
   }
 
