@@ -1273,8 +1273,10 @@
           allMetalPart = getAllAluminumPartForTariff(tariffs);
         }
         
-        // Keep original part number for BuyerPartNumber, use ALL METAL part for SupplierPartNumber
-        const baseRow = buildBaseRow(item, supplierMid, item.part_number, allMetalPart);
+        // BuyerPartNumber = original part number + base tariff, use ALL METAL part for SupplierPartNumber
+        const baseTariff = tariffs && tariffs.length > 0 ? tariffs[0] : '';
+        const buyerPartNum = item.part_number + (baseTariff ? ' ' + baseTariff : '');
+        const baseRow = buildBaseRow(item, supplierMid, buyerPartNum, allMetalPart);
         fillTariffs(baseRow, allMetalPart, item.net_weight || metalWeight.toString());
         exportRows.push(baseRow);
         
