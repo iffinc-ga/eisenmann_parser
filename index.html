@@ -1273,8 +1273,13 @@
           allMetalPart = getAllAluminumPartForTariff(tariffs);
         }
         
-        // BuyerPartNumber = original part number + base tariff, use ALL METAL part for SupplierPartNumber
-        const baseTariff = tariffs && tariffs.length > 0 ? tariffs[0] : '';
+        // BuyerPartNumber = original part number + base tariff (exclude 98/99 codes)
+        // Filter tariffs to exclude exemption codes starting with 98 or 99
+        const baseTariffs = tariffs ? tariffs.filter(t => {
+          const tStr = String(t || '').trim();
+          return tStr && !tStr.startsWith('98') && !tStr.startsWith('99');
+        }) : [];
+        const baseTariff = baseTariffs.length > 0 ? baseTariffs[0] : '';
         const buyerPartNum = item.part_number + (baseTariff ? ' ' + baseTariff : '');
         const baseRow = buildBaseRow(item, supplierMid, buyerPartNum, allMetalPart);
         fillTariffs(baseRow, allMetalPart, item.net_weight || metalWeight.toString());
