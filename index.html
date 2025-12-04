@@ -306,19 +306,11 @@
     try {
       setDbBanner('loading', 'DB: Loading from GitHub...', '');
       const rawUrl = `https://raw.githubusercontent.com/${GITHUB_CONFIG.owner}/${GITHUB_CONFIG.repo}/${GITHUB_CONFIG.branch}/${GITHUB_CONFIG.filePath}`;
-      console.log('[DB] Attempting to load from:', rawUrl);
       const wb = await fetchAndReadWorkbook(rawUrl, true);
       await hydrateDbFromWorkbook(wb);
     } catch (err) {
       console.error('[DB] GitHub load failed:', err);
-      const rawUrl = `https://raw.githubusercontent.com/${GITHUB_CONFIG.owner}/${GITHUB_CONFIG.repo}/${GITHUB_CONFIG.branch}/${GITHUB_CONFIG.filePath}`;
-      console.error('[DB] Failed URL was:', rawUrl);
-      console.error('[DB] Possible reasons:');
-      console.error('  1. File does not exist at this path');
-      console.error('  2. Repository is private (must be public for raw.githubusercontent.com)');
-      console.error('  3. Branch name is incorrect');
-      console.error('  4. File name is incorrect');
-      setDbBanner('offline', 'DB: Failed to load', 'Click "Upload DB File" or check console for URL');
+      setDbBanner('offline', 'DB: Failed to load', 'Working offline without database');
     }
   }
 
@@ -1245,29 +1237,21 @@
   }
 
   function exportToDescartes() {
-    console.log('[exportToDescartes] Starting export...');
     if (!allData.length) {
       showAlert('No data to export.', 'error');
       return;
     }
 
-    console.log('[exportToDescartes] Total items to process:', allData.length);
     const exportRows = [];
 
-    allData.forEach((item, index) => {
-      console.log(`[exportToDescartes] Processing item ${index + 1}:`, item.part_number);
-      
+    allData.forEach(item => {
       const supplierMid = lookupSupplierMid(item.supplier);
       const metalContent = item.metal_content || { hasMetals: false, metals: [] };
-      
-      console.log(`[exportToDescartes] Metal content:`, metalContent);
       
       // Check if this is 100% metal (single metal type at 100% with no other content)
       const metalWeight = parseFloatSafe(item.metal_weight);
       const metalPercentage = parseFloatSafe(item.metal_percentage);
       const netWeight = parseFloatSafe(item.net_weight);
-      
-      console.log(`[exportToDescartes] Metal weight: ${metalWeight}, Metal %: ${metalPercentage}, Net weight: ${netWeight}`);
       
       const is100PercentMetal = metalContent.hasMetals && 
                                 metalContent.metals.length === 1 &&
@@ -1275,28 +1259,19 @@
                                 !isNaN(metalWeight) && metalWeight > 0 &&
                                 (!netWeight || isNaN(netWeight) || Math.abs(metalWeight - netWeight) <= netWeight * 0.01);
       
-      console.log(`[exportToDescartes] Is 100% metal: ${is100PercentMetal}`);
-      
       if (is100PercentMetal) {
         // Use ALL STEEL/COPPER/ALUMINUM part number based on base tariff
         const tariffs = lookupTariffsByPart(item.part_number);
-        console.log(`[exportToDescartes] Tariffs for ${item.part_number}:`, tariffs);
-        
         const metal = metalContent.metals[0];
-        console.log(`[exportToDescartes] Metal type:`, metal.type);
         
         let allMetalPart = '';
         if (metal.type === 'Steel') {
-          console.log(`[exportToDescartes] Calling getAllSteelPartForTariff...`);
           allMetalPart = getAllSteelPartForTariff(tariffs);
-          console.log(`[exportToDescartes] Result from getAllSteelPartForTariff: ${allMetalPart}`);
         } else if (metal.type === 'Copper') {
           allMetalPart = getAllCopperPartForTariff(tariffs);
         } else if (metal.type === 'Aluminum') {
           allMetalPart = getAllAluminumPartForTariff(tariffs);
         }
-        
-        console.log(`[exportToDescartes] Using allMetalPart: ${allMetalPart}`);
         
         // Keep original part number for BuyerPartNumber, use ALL METAL part for SupplierPartNumber
         const baseRow = buildBaseRow(item, supplierMid, item.part_number, allMetalPart);
@@ -1304,7 +1279,6 @@
         exportRows.push(baseRow);
         
       } else {
-        console.log(`[exportToDescartes] Not 100% metal - normal processing`);
         // Normal processing - base row + separate metal rows
         const baseRow = buildBaseRow(item, supplierMid, item.part_number, item.part_number);
         fillTariffs(baseRow, item.part_number, item.net_weight);
@@ -1357,7 +1331,6 @@
     const fname = (uploadedPdfName ? uploadedPdfName + '_' : '') + 'descartes_ci_upload.xlsx';
     XLSX.writeFile(wb, fname);
     
-    console.log('[exportToDescartes] Export complete! File:', fname);
     showAlert(`Exported ${exportRows.length} rows to ${fname}`, 'success');
   }
 
