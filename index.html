@@ -155,13 +155,15 @@
       <div class="stat-label">Difference</div>
       <div class="stat-value" id="statDiff">$0.00</div>
     </div>
-    <div class="stat">
-      <div class="stat-label">Gross Weight (KG)</div>
-      <div class="stat-value" id="statGrossWeight">-</div>
+    <div class="stat editable">
+      <div class="stat-label">Gross Weight (KG) (Editable)</div>
+      <input autocomplete="off" type="number" step="0.001" id="statGrossWeight" placeholder="0.000"
+             onchange="updateInvoiceField('gross_weight', this.value)">
     </div>
-    <div class="stat">
-      <div class="stat-label">Net Weight (KG)</div>
-      <div class="stat-value" id="statNetWeight">-</div>
+    <div class="stat editable">
+      <div class="stat-label">Net Weight (KG) (Editable)</div>
+      <input autocomplete="off" type="number" step="0.001" id="statNetWeight" placeholder="0.000"
+             onchange="updateInvoiceField('invoice_net_weight', this.value)">
     </div>
   </div>
 
@@ -1150,15 +1152,15 @@
       
       const grossWt = parseFloatSafe(rows[0].gross_weight);
       const netWt = parseFloatSafe(rows[0].invoice_net_weight);
-      statGrossWeight.textContent = !isNaN(grossWt) ? grossWt.toFixed(3) + ' KG' : '-';
-      statNetWeight.textContent = !isNaN(netWt) ? netWt.toFixed(3) + ' KG' : '-';
+      statGrossWeight.value = !isNaN(grossWt) ? grossWt.toFixed(3) : '';
+      statNetWeight.value = !isNaN(netWt) ? netWt.toFixed(3) : '';
     } else {
       statDate.value = '';
       statSupplier.value = '';
       statItems.textContent = '0';
       statTotal.value = '';
-      statGrossWeight.textContent = '-';
-      statNetWeight.textContent = '-';
+      statGrossWeight.value = '';
+      statNetWeight.value = '';
     }
 
     let sum = 0;
