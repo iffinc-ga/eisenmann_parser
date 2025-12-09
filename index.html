@@ -1429,6 +1429,14 @@
     showAlert(`Exported ${exportRows.length} rows to ${fname}`, 'success');
   }
 
+  function roundNetWeight(weight) {
+    if (!weight) return '';
+    const parsed = parseFloatSafe(weight);
+    if (isNaN(parsed) || parsed <= 0) return '';
+    const rounded = Math.round(parsed);
+    return Math.max(1, rounded);
+  }
+
   function buildBaseRow(item, supplierMid, buyerPartNum, supplierPartNum) {
     return {
       'InvoiceNumber': item.invoice_number || '',
@@ -1454,7 +1462,7 @@
       'PO_Date': '',
       'GrossWeight': '',
       'GrossWeightUnit': '',
-      'NetWeight': item.net_weight || '',
+      'NetWeight': roundNetWeight(item.net_weight),
       'TariffNumber': '',
       'TariffDescription': '',
       'Quantity1': '',
@@ -1524,6 +1532,7 @@
   function fillTariffs(row, partNumber, netWeight) {
     const tariffs = lookupTariffsByPart(partNumber);
     const tariffFields = ['TariffNumber', 'SecondaryTariffNumber', 'ThirdTariffNumber', '4TariffNumber', '5TariffNumber'];
+    const roundedWeight = roundNetWeight(netWeight);
 
     tariffs.forEach((tariff, idx) => {
       if (idx < tariffFields.length) {
@@ -1534,39 +1543,29 @@
           const uomInfo = lookupHtsUom(tariff);
           
           if (idx === 0) {
-            row['Quantity1'] = netWeight;
-            row['UnitOfMeasure1'] = uomInfo.uom1;
+            row['Quantity1'] = roundedWeight;
             if (uomInfo.uom2) {
-              row['Quantity2'] = netWeight;
-              row['UnitOfMeasure2'] = uomInfo.uom2;
+              row['Quantity2'] = roundedWeight;
             }
           } else if (idx === 1) {
-            row['Secondary Quantity1'] = netWeight;
-            row['Secondaryunitofmeasure1'] = uomInfo.uom1;
+            row['Secondary Quantity1'] = roundedWeight;
             if (uomInfo.uom2) {
-              row['secondaryquantity2'] = netWeight;
-              row['secondaryunitofmeasure2'] = uomInfo.uom2;
+              row['secondaryquantity2'] = roundedWeight;
             }
           } else if (idx === 2) {
-            row['ThirdTariffQuantity1'] = netWeight;
-            row['ThirdTariffUnitofMeasure1'] = uomInfo.uom1;
+            row['ThirdTariffQuantity1'] = roundedWeight;
             if (uomInfo.uom2) {
-              row['ThirdTariffQuantity2'] = netWeight;
-              row['ThirdTariffUnitofMeasure2'] = uomInfo.uom2;
+              row['ThirdTariffQuantity2'] = roundedWeight;
             }
           } else if (idx === 3) {
-            row['4TariffQuantity1'] = netWeight;
-            row['4TariffUnitofMeasure1'] = uomInfo.uom1;
+            row['4TariffQuantity1'] = roundedWeight;
             if (uomInfo.uom2) {
-              row['4TariffQuantity2'] = netWeight;
-              row['4TariffUnitofMeasure2'] = uomInfo.uom2;
+              row['4TariffQuantity2'] = roundedWeight;
             }
           } else if (idx === 4) {
-            row['5TariffQuantity1'] = netWeight;
-            row['5TariffUnitofMeasure1'] = uomInfo.uom1;
+            row['5TariffQuantity1'] = roundedWeight;
             if (uomInfo.uom2) {
-              row['5TariffQuantity2'] = netWeight;
-              row['5TariffUnitofMeasure2'] = uomInfo.uom2;
+              row['5TariffQuantity2'] = roundedWeight;
             }
           }
         }
@@ -1577,11 +1576,11 @@
     const partUpper = String(partNumber).toUpperCase();
     if (partUpper.startsWith('ALL STEEL') || partUpper.startsWith('ALL COPPER') || partUpper.startsWith('ALL ALUMINUM')) {
       if (tariffs.length > 2 && tariffs[2]) {
-        row['ThirdTariffQuantity1'] = netWeight;
+        row['ThirdTariffQuantity1'] = roundedWeight;
       }
       row['TariffNumber'] = '';
       row['ThirdTariffUnitofMeasure1'] = '';
-      row['Secondary Quantity1'] = netWeight;
+      row['Secondary Quantity1'] = roundedWeight;
     }
   }
 
@@ -1605,11 +1604,10 @@
       metalRow['TariffNumber'] = '99030133';
     }
     
-    const metalWeight = String(metal.weight || '');
-    metalRow['NetWeight'] = metalWeight;
-    metalRow['Quantity'] = metalWeight;
-    metalRow['Secondary Quantity1'] = metalWeight;
-    metalRow['Secondaryunitofmeasure1'] = 'KG';
+    const roundedMetalWeight = roundNetWeight(metal.weight);
+    metalRow['NetWeight'] = roundedMetalWeight;
+    metalRow['Quantity'] = roundedMetalWeight;
+    metalRow['Secondary Quantity1'] = roundedMetalWeight;
     metalRow['ItemTotal'] = '0';
     metalRow['UnitPrice'] = '0';
     
