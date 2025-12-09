@@ -204,14 +204,110 @@
 
   let invoices = [];
   let currentInvoice = null;
-  let globalDatabase = null;
-  let dbMode = 'loading';
+  
+  // Database state
+  let eisenmannDb = [];
+  let htsCodesDb = [];
+  let supplierMidDb = [];
+  let steelAlumListDb = [];
 
-  const GITHUB_DB_URL = 'https://iffinc-ga.github.io/eisenmann_parser//main/updated_eisenmann_db.xlsx';
+  const GITHUB_CONFIG = {
+    owner: 'iffinc-ga',
+    repo: 'eisenmann_parser',
+    branch: 'main',
+    filePath: 'updated_eisenmann_db.xlsx'
+  };
+
+  const dbStatusEl = document.getElementById('dbStatus');
+  const dbInfo = document.getElementById('dbInfo');
+  const retryDbBtn = document.getElementById('retryDbBtn');
+  const uploadDbBtn = document.getElementById('uploadDbBtn');
+  const dbFileInput = document.getElementById('dbFileInput');
+  const offlineDbBtn = document.getElementById('offlineDbBtn');
+
+  function setDbBanner(state, msg, info) {
+    if (!dbStatusEl) return;
+    let cls = 'db-status';
+    if (state === 'loading') cls += ' loading';
+    else if (state === 'loaded') cls += ' loaded';
+    else if (state === 'offline') cls += ' offline';
+    dbStatusEl.className = cls;
+    dbStatusEl.textContent = msg;
+    if (dbInfo && info != null) dbInfo.textContent = info;
+  }
+
+  function abortableFetch(url, timeoutMs = 8000) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    return fetch(url, { signal: ctrl.signal }).finally(() => clearTimeout(t));
+  }
+
+  async function fetchAndReadWorkbook(url, useAbort) {
+    const res = useAbort ? await abortableFetch(url, 8000) : await fetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const buf = await res.arrayBuffer();
+    return XLSX.read(buf, { type: 'array' });
+  }
+
+  async function hydrateDbFromWorkbook(workbook) {
+    console.log('[DB] Available sheet names:', workbook.SheetNames);
+    
+    // Load Eisenmann sheet
+    const eisenmannSheet = workbook.SheetNames.find(n => n.toLowerCase().includes('eisenmann')) || workbook.SheetNames[0];
+    eisenmannDb = XLSX.utils.sheet_to_json(workbook.Sheets[eisenmannSheet], { defval: '' });
+    console.log(`[DB] Loaded ${eisenmannSheet}: ${eisenmannDb.length} rows`);
+
+    // Load HTS codes sheet if exists
+    const htsSheet = workbook.SheetNames.find(n => n.toLowerCase().includes('hts'));
+    if (htsSheet) {
+      htsCodesDb = XLSX.utils.sheet_to_json(workbook.Sheets[htsSheet], { defval: '' });
+      console.log(`[DB] Loaded ${htsSheet}: ${htsCodesDb.length} rows`);
+    }
+
+    // Load supplier MID sheet if exists
+    const midSheet = workbook.SheetNames.find(n => n.toLowerCase().includes('mid'));
+    if (midSheet) {
+      supplierMidDb = XLSX.utils.sheet_to_json(workbook.Sheets[midSheet], { defval: '' });
+      console.log(`[DB] Loaded ${midSheet}: ${supplierMidDb.length} rows`);
+    }
+
+    // Load Steel_Alum_list sheet - try multiple name patterns
+    const steelAlumSheet = workbook.SheetNames.find(n => {
+      const lower = n.toLowerCase().replace(/[_\s]/g, '');
+      return lower.includes('steelalum') || n === 'Steel_Alum_list';
+    });
+    
+    console.log('[DB] Looking for Steel_Alum_list sheet...');
+    console.log('[DB] Found sheet name:', steelAlumSheet);
+    
+    if (steelAlumSheet) {
+      steelAlumListDb = XLSX.utils.sheet_to_json(workbook.Sheets[steelAlumSheet], { defval: '' });
+      console.log(`[DB] Loaded ${steelAlumSheet}: ${steelAlumListDb.length} rows`);
+      if (steelAlumListDb.length > 0) {
+        console.log('[DB] Steel_Alum_list columns:', Object.keys(steelAlumListDb[0]));
+      }
+    } else {
+      console.warn('[DB] Steel_Alum_list sheet not found in workbook!');
+    }
+
+    setDbBanner('loaded', 'DB: Loaded successfully', `${eisenmannDb.length} parts`);
+  }
+
+  async function tryLoadDbFromGitHub() {
+    try {
+      setDbBanner('loading', 'DB: Loading from GitHub...', '');
+      const rawUrl = `https://raw.githubusercontent.com/${GITHUB_CONFIG.owner}/${GITHUB_CONFIG.repo}/${GITHUB_CONFIG.branch}/${GITHUB_CONFIG.filePath}`;
+      const wb = await fetchAndReadWorkbook(rawUrl, true);
+      await hydrateDbFromWorkbook(wb);
+    } catch (err) {
+      console.error('[DB] GitHub load failed:', err);
+      setDbBanner('offline', 'DB: Failed to load', 'Working offline without database');
+    }
+  }
 
   document.addEventListener('DOMContentLoaded', () => {
     initEventListeners();
-    tryLoadDatabase();
+    tryLoadDbFromGitHub();
   });
 
   function initEventListeners() {
@@ -234,122 +330,62 @@
       if (e.dataTransfer.files.length) handleFileSelect(e.dataTransfer.files[0]);
     });
 
-    document.getElementById('retryDbBtn').addEventListener('click', tryLoadDatabase);
-    document.getElementById('uploadDbBtn').addEventListener('click', () => document.getElementById('dbFileInput').click());
-    document.getElementById('offlineDbBtn').addEventListener('click', setOfflineMode);
-    document.getElementById('dbFileInput').addEventListener('change', (e) => {
-      if (e.target.files.length) loadDatabaseFromFile(e.target.files[0]);
+    retryDbBtn.addEventListener('click', tryLoadDbFromGitHub);
+    
+    uploadDbBtn.addEventListener('click', () => {
+      dbFileInput.click();
     });
+    
+    dbFileInput.addEventListener('change', async (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      
+      try {
+        setDbBanner('loading', 'DB: Loading from file...', '');
+        const arrayBuffer = await file.arrayBuffer();
+        const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+        await hydrateDbFromWorkbook(workbook);
+      } catch (err) {
+        console.error('[DB] File load failed:', err);
+        setDbBanner('offline', 'DB: Failed to load file', err.message);
+      }
+    });
+    
+    offlineDbBtn.addEventListener('click', () => {
+      setDbBanner('offline', 'DB: Working offline', 'Database features disabled');
+    });
+
     document.getElementById('invoiceSelect').addEventListener('change', (e) => {
       if (e.target.value) displayInvoice(e.target.value);
     });
   }
 
-  function tryLoadDatabase() {
-    setDbStatus('loading', 'Attempting to load database from GitHub...');
-    fetch(GITHUB_DB_URL)
-      .then(r => r.ok ? r.arrayBuffer() : Promise.reject('Network error'))
-      .then(data => {
-        const wb = XLSX.read(data, { type: 'array' });
-        globalDatabase = parseDatabase(wb);
-        setDbStatus('loaded', `✓ Database loaded (${globalDatabase.parts.length} parts, ${globalDatabase.htsUom.length} HTS)`);
-        console.log('Database loaded:', globalDatabase);
-      })
-      .catch(err => {
-        console.error('DB load failed:', err);
-        setDbStatus('loading', '✗ Could not load from GitHub. Upload file or work offline.');
-      });
-  }
-
-  function loadDatabaseFromFile(file) {
-    setDbStatus('loading', 'Loading database from file...');
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const wb = XLSX.read(e.target.result, { type: 'binary' });
-        globalDatabase = parseDatabase(wb);
-        setDbStatus('loaded', `✓ Database loaded from file (${globalDatabase.parts.length} parts, ${globalDatabase.htsUom.length} HTS)`);
-        console.log('Database loaded from file:', globalDatabase);
-      } catch (err) {
-        console.error('Failed to parse DB:', err);
-        setDbStatus('loading', '✗ Failed to parse database file');
-      }
-    };
-    reader.readAsBinaryString(file);
-  }
-
-  function setOfflineMode() {
-    dbMode = 'offline';
-    globalDatabase = { parts: [], htsUom: [] };
-    setDbStatus('offline', '⚠ Working offline (no tariff lookups)');
-  }
-
-  function setDbStatus(mode, message) {
-    dbMode = mode;
-    const status = document.getElementById('dbStatus');
-    const info = document.getElementById('dbInfo');
-    status.className = 'db-status ' + mode;
-    status.textContent = 'DB: ' + mode;
-    info.textContent = message;
-  }
-
-  function parseDatabase(wb) {
-    const parts = [];
-    const htsUom = [];
-
-    if (wb.SheetNames.includes('Parts')) {
-      const ws = wb.Sheets['Parts'];
-      const rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
-      if (rows.length > 1) {
-        const headers = rows[0].map(h => String(h).toLowerCase().trim());
-        const partIdx = headers.indexOf('part number');
-        const tariffIdx = headers.indexOf('tariff');
-        if (partIdx >= 0 && tariffIdx >= 0) {
-          for (let i = 1; i < rows.length; i++) {
-            const row = rows[i];
-            const part = String(row[partIdx] || '').trim();
-            const tariff = String(row[tariffIdx] || '').trim();
-            if (part && tariff) parts.push({ part, tariff });
-          }
-        }
-      }
-    }
-
-    if (wb.SheetNames.includes('HTS_UOM')) {
-      const ws = wb.Sheets['HTS_UOM'];
-      const rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
-      if (rows.length > 1) {
-        const headers = rows[0].map(h => String(h).toLowerCase().trim());
-        const htsIdx = headers.indexOf('hts');
-        const uom1Idx = headers.indexOf('uom1');
-        const uom2Idx = headers.indexOf('uom2');
-        if (htsIdx >= 0) {
-          for (let i = 1; i < rows.length; i++) {
-            const row = rows[i];
-            const hts = String(row[htsIdx] || '').trim();
-            const uom1 = String(row[uom1Idx] || '').trim();
-            const uom2 = String(row[uom2Idx] || '').trim();
-            if (hts) htsUom.push({ hts, uom1, uom2 });
-          }
-        }
-      }
-    }
-
-    return { parts, htsUom };
-  }
-
   function lookupTariffsByPart(partNumber) {
-    if (!globalDatabase || !globalDatabase.parts.length) return [];
-    const pn = String(partNumber).trim().toUpperCase();
-    const found = globalDatabase.parts.filter(p => String(p.part).trim().toUpperCase() === pn);
-    return found.map(f => f.tariff);
+    if (!eisenmannDb.length) return [];
+    const upper = String(partNumber).toUpperCase().trim();
+    // Try both column name formats for compatibility
+    const row = eisenmannDb.find(r => 
+      String(r['Part Number'] || r['part number'] || '').toUpperCase().trim() === upper
+    );
+    if (!row) return [];
+    
+    const tariffs = [];
+    for (let i = 1; i <= 5; i++) {
+      const t = row[`Tariff${i}`] || row[`tariff${i}`] || '';
+      if (t) tariffs.push(String(t).trim());
+    }
+    return tariffs;
   }
 
   function lookupHtsUom(hts) {
-    if (!globalDatabase || !globalDatabase.htsUom.length) return { uom1: '', uom2: '' };
+    if (!htsCodesDb.length) return { uom1: '', uom2: '' };
     const htsStr = String(hts).trim();
-    const found = globalDatabase.htsUom.find(h => String(h.hts).trim() === htsStr);
-    return found ? { uom1: found.uom1, uom2: found.uom2 } : { uom1: '', uom2: '' };
+    const row = htsCodesDb.find(r => String(r.HTS || r.hts || '').trim() === htsStr);
+    if (!row) return { uom1: '', uom2: '' };
+    return {
+      uom1: row.UOM1 || row.uom1 || '',
+      uom2: row.UOM2 || row.uom2 || ''
+    };
   }
 
   async function handleFileSelect(file) {
