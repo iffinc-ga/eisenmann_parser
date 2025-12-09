@@ -288,6 +288,10 @@
     if (midSheet) {
       supplierMidDb = XLSX.utils.sheet_to_json(workbook.Sheets[midSheet], { defval: '' });
       console.log(`[DB] Loaded ${midSheet}: ${supplierMidDb.length} rows`);
+      if (supplierMidDb.length > 0) {
+        console.log('[DB] MID columns:', Object.keys(supplierMidDb[0]));
+        console.log('[DB] First MID entry:', supplierMidDb[0]);
+      }
     }
 
     // Load Steel_Alum_list sheet - try multiple name patterns
@@ -399,11 +403,24 @@
     };
   }
 
+  // Lookup supplier MID from the MID sheet in the database
+  // Database columns: MANUFACTURERID (the MID code) and MANUFACTURERNAME (supplier name)
+  // Example: "Eisenmann GmbH" -> "DEEISGMB81BOE"
   function lookupSupplierMid(supplierName) {
     if (!supplierMidDb.length) return '';
     const upper = String(supplierName).toUpperCase().trim();
-    const row = supplierMidDb.find(r => String(r['Supplier'] || '').toUpperCase().trim().includes(upper));
-    return row ? String(row['MID'] || '').trim() : '';
+    
+    // Try both old and new column name formats
+    const row = supplierMidDb.find(r => {
+      const manufacturerName = String(r['MANUFACTURERNAME'] || r['Supplier'] || '').toUpperCase().trim();
+      // Check if the supplier name is contained in the manufacturer name or vice versa
+      return manufacturerName.includes(upper) || upper.includes(manufacturerName);
+    });
+    
+    if (!row) return '';
+    
+    // Return the MID from either column name format
+    return String(row['MANUFACTURERID'] || row['MID'] || '').trim();
   }
 
   function getAllSteelPartForTariff(tariffs) {
