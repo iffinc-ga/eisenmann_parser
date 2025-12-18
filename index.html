@@ -89,6 +89,10 @@
   <div class="header">
     <h1>📄 Eisenmann Invoice PDF Parser</h1>
     <p>Parse Eisenmann customs invoices into editable line items and export to Descartes CI template.</p>
+    <div style="margin-top:12px;padding:10px;background:#fff3cd;border-left:4px solid #ffc107;font-size:13px;">
+      <strong>⚠️ Multi-Page Invoice Note:</strong> Metal content matching works automatically for single-page invoices. 
+      For multi-page invoices, <strong>please verify the Metal Type column</strong> matches your invoice and use the dropdown to correct any mismatches before exporting.
+    </div>
   </div>
 
   <div class="db-banner">
@@ -719,115 +723,55 @@
   }
 
   // Helper to extract all metal content declarations from an invoice block
+  function extractMetalContentFromSection(sectionText) {
+    const text = String(sectionText || '');
+
+    // 1) Strict "no metal content" statements
+    const explicitNoContent =
+      /Does\s+not\s+contain\s+any\s+(?:aluminum|aluminium)\s*,?\s*(?:steel\s*(?:or)?\s*copper|steel|copper)\s*[\.,]/i.test(text) ||
+      /Does\s+not\s+contain\s+any\s+(?:steel|copper|aluminum|aluminium)\s*[\.,]/i.test(text);
+
+    // 2) Declarations like "Steel content 100%: 50 kg"
+    const metals = [];
+    const declPattern = /(Steel|Copper|Aluminum|Aluminium)\s*content\s*(\d+)\s*%\s*:\s*([\d.,]+)\s*kg/gi;
+    let m;
+    while ((m = declPattern.exec(text)) !== null) {
+      const typRaw = (m[1] || '').toLowerCase();
+      const type = typRaw.startsWith('alum') ? 'Aluminum' : (typRaw.charAt(0).toUpperCase() + typRaw.slice(1));
+      const pct = String(m[2] || '').trim();
+      const wt = String(m[3] || '').replace(/,/g, '').trim();
+      metals.push({ type, percentage: pct, weight: wt, countryMeltPour: '' });
+    }
+
+    // 3) Country of Melt & Pour
+    const meltMatch = text.match(/Country\s+of\s+Melt\s*&\s*Pour\s*:\s*([A-Z]{2,3})/i);
+    const melt = meltMatch ? meltMatch[1].toUpperCase() : '';
+
+    if (metals.length) {
+      metals[0].countryMeltPour = melt;
+      return { hasMetals: true, metals, noContent: false };
+    }
+
+    // 4) Ambiguous statement (don't force None)
+    const amb = text.match(/Steel\s+or\s+Copper\.\s*([\d.,]+)\s*kg/i);
+    if (amb) {
+      const wt = String(amb[1] || '').replace(/,/g, '').trim();
+      return { hasMetals: true, metals: [{ type: '', percentage: '', weight: wt, countryMeltPour: '' }], noContent: false };
+    }
+
+    // 5) Explicit no content
+    if (explicitNoContent) {
+      return { hasMetals: false, metals: [], noContent: true };
+    }
+
+    return { hasMetals: false, metals: [], noContent: false };
+  }
+
+  // Legacy extractor kept for compatibility; no longer used for line alignment.
   function extractAllMetalContent(text) {
-    const noContentPattern = /Does\s+not\s+contain\s+any\s+aluminum[,\s]+Steel\s+or\s+Copper/gi;
-    const noContentMatches = [...text.matchAll(noContentPattern)];
-    
-    const steelPattern = /Steel\s*content\s*(\d+)\s*%\s*:\s*([\d,\.]+)\s*kg/gi;
-    const copperPattern = /Copper\s*content\s*(\d+)\s*%\s*:\s*([\d,\.]+)\s*kg/gi;
-    const aluminumPattern = /Aluminum\s*content\s*(\d+)\s*%\s*:\s*([\d,\.]+)\s*kg/gi;
-    
-    const steelMatches = [...text.matchAll(steelPattern)];
-    const copperMatches = [...text.matchAll(copperPattern)];
-    const aluminumMatches = [...text.matchAll(aluminumPattern)];
-    
-    const allDeclarations = [];
-    
-    noContentMatches.forEach(m => {
-      allDeclarations.push({ position: m.index, type: 'none', match: m });
-    });
-    
-    steelMatches.forEach(m => {
-      allDeclarations.push({ position: m.index, type: 'steel', match: m });
-    });
-    
-    copperMatches.forEach(m => {
-      allDeclarations.push({ position: m.index, type: 'copper', match: m });
-    });
-    
-    aluminumMatches.forEach(m => {
-      allDeclarations.push({ position: m.index, type: 'aluminum', match: m });
-    });
-    
-    allDeclarations.sort((a, b) => a.position - b.position);
-    
-    let currentGroup = null;
-    const groups = [];
-    
-    allDeclarations.forEach((decl) => {
-      const needNewGroup = !currentGroup || 
-                          decl.type === 'none' ||
-                          currentGroup.lastType === 'none' ||
-                          (decl.position - currentGroup.lastPosition) > 50 ||
-                          (currentGroup.lastType === decl.type && decl.type !== 'none');
-      
-      if (needNewGroup) {
-        currentGroup = {
-          metals: [],
-          noContent: false,
-          lastPosition: decl.position,
-          lastType: decl.type
-        };
-        groups.push(currentGroup);
-      }
-      
-      currentGroup.lastPosition = decl.position;
-      currentGroup.lastType = decl.type;
-      
-      if (decl.type === 'none') {
-        currentGroup.noContent = true;
-      } else {
-        const percentage = parseInt(decl.match[1]);
-        const weight = parseFloat(decl.match[2].replace(',', '.'));
-        
-        const contextStart = Math.max(0, decl.position - 50);
-        const contextEnd = Math.min(text.length, decl.position + 300);
-        const context = text.slice(contextStart, contextEnd);
-        
-        const metal = {
-          type: decl.type.charAt(0).toUpperCase() + decl.type.slice(1),
-          percentage: percentage,
-          weight: weight,
-          unit: 'kg',
-          mixture: !context.includes('No mixture'),
-          countryMeltPour: extractCountryMeltPour(context)
-        };
-        
-        currentGroup.metals.push(metal);
-      }
-    });
-    
-    const result = groups.map(group => {
-      if (group.metals.length > 0) {
-        return { hasMetals: true, metals: group.metals, noContent: false };
-      } else if (group.noContent) {
-        return { hasMetals: false, metals: [], noContent: true };
-      } else {
-        return { hasMetals: false, metals: [], noContent: false };
-      }
-    });
-    
-    return result;
+    return [];
   }
 
-  function extractCountryMeltPour(text) {
-    let countryMatch = text.match(/Country\s*of\s*Melt\s*&\s*Pour\s*:\s*(\w+)/i);
-    if (!countryMatch) {
-      countryMatch = text.match(/Country\s*of\s*Melt\s*and\s*Pour\s*:\s*(\w+)/i);
-    }
-    if (countryMatch) {
-      const code = countryMatch[1].toUpperCase();
-      const countryMap = {
-        'GER': 'Germany', 'USA': 'United States', 'CHN': 'China', 'JPN': 'Japan',
-        'FRA': 'France', 'ITA': 'Italy', 'UK': 'United Kingdom', 'GB': 'United Kingdom',
-        'DE': 'Germany', 'DEU': 'Germany'
-      };
-      return countryMap[code] || code;
-    }
-    return null;
-  }
-
-  // ========= PDF PARSING =========
   async function handleFile(file) {
     if (!isPdfFile(file)) {
       showAlert('Please upload a PDF file.', 'error');
@@ -919,7 +863,7 @@
     }
     headers.push({ index: text.length, invoice_number: null, invoice_date: null });
 
-    const linePattern = /(\d{5,6})\s+([A-Z0-9]+)\s+([\d.,]+)\s+([A-Z]+)\s+([\d.,]+)\s+USD\s+([\d.,]+)\s+([A-Z]+)\s+([\d.,]+)/g;
+    const linePattern = /(\d{5,6})\s+([A-Z0-9]+)\s+([\d.,]+)\s*([A-Z]{1,5})\s+([\d.,]+)\s+USD\s+(\d+)\s*([A-Z]{1,5})\s+([\d.,]+)/g;
 
     for (let i = 0; i < headers.length - 1; i++) {
       const start = headers[i].index;
@@ -968,8 +912,64 @@
         });
         continue;
       }
+      // METAL CONTENT MATCHING - COUNT-AWARE ALIGNMENT
+      // Eisenmann PDFs often place metal declarations in a separate column that appears AFTER line items in text extraction.
+      // For many single-page invoices, the extracted declaration order is reversed vs item order.
+      // For multi-page sections (or when only some items have declarations), reverse-order pairing can be wrong.
+      // This logic:
+      //  - extracts ONLY explicit declarations like "Steel content 100%: 13 kg"
+      //  - ignores lines like "Does not contain any aluminum, Steel or Copper. 1,5 kg" (NOT a "None" flag)
+      //  - pairs declarations to items based on counts:
+      //      * if declarations == items -> reverse pairing (most common Eisenmann behavior)
+      //      * if declarations < items  -> assign in forward order to the first N items
+      //      * if declarations > items  -> reverse pairing as a fallback
 
-      const metalContents = extractAllMetalContent(block);
+      const allMetals = [];
+      const declPattern = /(Steel|Copper|Aluminum|Aluminium)\s*content\s*(\d+)\s*%\s*:\s*([\d.,]+)\s*kg/gi;
+
+      // Optional explicit "no metal" statement, but ONLY if it does NOT include a KG amount nearby
+      const nonePattern = /Does\s+not\s+contain\s+any\s+(?:aluminum|aluminium)\s*,?\s*(?:steel\s*(?:or)?\s*copper|steel|copper)/ig;
+
+      let dm;
+      while ((dm = declPattern.exec(block)) !== null) {
+        const typRaw = (dm[1] || '').toLowerCase();
+        const type = typRaw.startsWith('alum') ? 'Aluminum' : (typRaw.charAt(0).toUpperCase() + typRaw.slice(1));
+        const pct = String(dm[2] || '').trim();
+        const wt = String(dm[3] || '').replace(/,/g, '').trim();
+
+        // Try to find Country of Melt & Pour nearby
+        const contextStart = Math.max(0, dm.index - 250);
+        const contextEnd = Math.min(block.length, dm.index + 350);
+        const context = block.slice(contextStart, contextEnd);
+        const meltMatch = context.match(/Country\s+of\s+Melt\s*&\s*Pour\s*:\s*([A-Z]{2,3})/i);
+        const melt = meltMatch ? meltMatch[1].toUpperCase() : '';
+
+        allMetals.push({
+          type: 'metal',
+          metal: { type, percentage: pct, weight: wt, countryMeltPour: melt }
+        });
+      }
+
+      // Only treat as "None" if no KG appears within the next ~25 chars (the problematic Eisenmann line includes a KG)
+      let nm;
+      while ((nm = nonePattern.exec(block)) !== null) {
+        const tail = block.slice(nm.index, Math.min(block.length, nm.index + 80));
+        if (/\bkg\b/i.test(tail)) continue; // ignore "Steel or Copper. 1,5 kg" style lines
+        allMetals.push({ type: 'nometal' });
+      }
+
+      const metalAssignments = new Array(lineMatches.length).fill(null);
+      if (allMetals.length) {
+        if (allMetals.length === lineMatches.length) {
+          const reversed = [...allMetals].reverse();
+          for (let k = 0; k < lineMatches.length; k++) metalAssignments[k] = reversed[k];
+        } else if (allMetals.length < lineMatches.length) {
+          for (let k = 0; k < allMetals.length; k++) metalAssignments[k] = allMetals[k];
+        } else {
+          const reversed = [...allMetals].reverse();
+          for (let k = 0; k < lineMatches.length; k++) metalAssignments[k] = reversed[k];
+        }
+      }
 
       lineMatches.forEach((lm, idx) => {
         const position = lm[1];
@@ -998,26 +998,47 @@
         if (cooMatch) coo = cooMatch[1].trim();
         if (coo.toLowerCase().includes('germany')) coo = 'DE';
 
-        const metalContent = metalContents[idx] || { hasMetals: false, metals: [], noContent: false };
+
+        const metalContent = extractMetalContentFromSection(itemSection);
         
+        // Get metal content from the per-item assignment array
         let metalType = '';
         let metalPercentage = '';
         let metalWeight = '';
         let metalCountry = '';
-        
-        if (metalContent.noContent) {
-          metalType = 'None';
-        } else if (metalContent.hasMetals && metalContent.metals.length > 0) {
-          const metal = metalContent.metals[0];
-          metalType = metal.type;
-          metalPercentage = metal.percentage;
-          metalWeight = metal.weight;
-          metalCountry = metal.countryMeltPour || '';
+        let metalContentObj = { hasMetals: false, metals: [], noContent: false };
+
+        const assigned = metalAssignments[idx];
+        const effectiveMetal = assigned || (metalContent && (metalContent.noContent || metalContent.hasMetals) ? metalContent : null);
+
+        if (effectiveMetal) {
+          if (effectiveMetal.noContent === true || effectiveMetal.type === 'nometal') {
+            metalType = 'None';
+            metalPercentage = '';
+            metalWeight = '';
+            metalCountry = '';
+            metalContentObj = { hasMetals: false, metals: [], noContent: true };
+          } else if (effectiveMetal.hasMetals === true) {
+            const m0 = (effectiveMetal.metals && effectiveMetal.metals[0]) ? effectiveMetal.metals[0] : null;
+            if (m0) {
+              metalType = m0.type || '';
+              metalPercentage = (m0.percentage != null) ? String(m0.percentage) : '';
+              metalWeight = m0.weight || '';
+              metalCountry = m0.countryMeltPour || '';
+              metalContentObj = { hasMetals: true, metals: [m0], noContent: false };
+            }
+          } else if (effectiveMetal.type === 'metal' && effectiveMetal.metal) {
+            metalType = effectiveMetal.metal.type || '';
+            metalPercentage = (effectiveMetal.metal.percentage != null) ? String(effectiveMetal.metal.percentage) : '';
+            metalWeight = effectiveMetal.metal.weight || '';
+            metalCountry = effectiveMetal.metal.countryMeltPour || '';
+            metalContentObj = { hasMetals: true, metals: [effectiveMetal.metal], noContent: false };
+          }
         }
-        
+
         let netWeight = '';
-        if (metalContent.hasMetals && metalContent.metals.length > 0) {
-          const fullMetal = metalContent.metals.find(m => m.percentage === 100);
+        if (metalContentObj.hasMetals && metalContentObj.metals.length > 0) {
+          const fullMetal = metalContentObj.metals.find(m => m.percentage == 100);
           if (fullMetal) {
             netWeight = fullMetal.weight.toString();
           }
@@ -1032,6 +1053,7 @@
           supplier: 'Eisenmann GmbH',
           position: position,
           part_number: material,
+          original_part_number: material,
           quantity: qty1,
           unit: unit1,
           unit_price: unitPrice,
@@ -1043,7 +1065,7 @@
           metal_percentage: metalPercentage,
           metal_weight: metalWeight,
           metal_country: metalCountry,
-          metal_content: metalContent
+          metal_content: metalContentObj
         });
       });
     }
@@ -1142,7 +1164,67 @@
     const idx = parseInt(e.target.dataset.index, 10);
     const field = e.target.dataset.field;
     if (Number.isNaN(idx) || !field) return;
-    allData[idx][field] = e.target.value;
+
+    const item = allData[idx];
+    const val = e.target.value;
+
+    item[field] = val;
+
+    // Keep metal fields + metal_content consistent so UI + export behave correctly
+    if (field === 'metal_type') {
+      if (val === 'None') {
+        // User override: explicitly no metal content
+        item.metal_percentage = '';
+        item.metal_weight = '';
+        item.metal_country = '';
+        item.metal_content = { hasMetals: false, metals: [], noContent: true };
+
+        // Restore original part number for export correctness
+        if (item.original_part_number) item.part_number = item.original_part_number;
+
+        // Re-render so the cleared values show immediately
+        loadInvoiceData();
+        updateStats();
+        return;
+      }
+
+      if (val === '' || val == null) {
+        item.metal_content = { hasMetals: false, metals: [], noContent: false };
+      } else {
+        item.metal_content = {
+          hasMetals: true,
+          metals: [{
+            type: val,
+            percentage: String(item.metal_percentage || '').trim(),
+            weight: String(item.metal_weight || '').trim(),
+            countryMeltPour: String(item.metal_country || '').trim()
+          }],
+          noContent: false
+        };
+      }
+
+      updateStats();
+      return;
+    }
+
+    if (field === 'metal_percentage' || field === 'metal_weight' || field === 'metal_country') {
+      const t = String(item.metal_type || '').trim();
+      if (t && t !== 'None') {
+        item.metal_content = {
+          hasMetals: true,
+          metals: [{
+            type: t,
+            percentage: String(item.metal_percentage || '').trim(),
+            weight: String(item.metal_weight || '').trim(),
+            countryMeltPour: String(item.metal_country || '').trim()
+          }],
+          noContent: false
+        };
+      }
+      updateStats();
+      return;
+    }
+
     updateStats();
   }
 
@@ -1360,7 +1442,7 @@
       const metalPercentage = parseFloatSafe(item.metal_percentage);
       const netWeight = parseFloatSafe(item.net_weight);
       
-      const is100PercentMetal = metalContent.hasMetals && 
+      const is100PercentMetal = (!metalContent.noContent) && metalContent.hasMetals && 
                                 metalContent.metals.length === 1 &&
                                 metalPercentage === 100 &&
                                 !isNaN(metalWeight) && metalWeight > 0 &&
@@ -1399,7 +1481,7 @@
         exportRows.push(baseRow);
 
         // Add metal content rows if present
-        if (metalContent.hasMetals && metalContent.metals.length > 0) {
+        if (!metalContent.noContent && metalContent.hasMetals && metalContent.metals.length > 0) {
           metalContent.metals.forEach(metal => {
             const metalRow = buildMetalRow(item, supplierMid, metal);
             exportRows.push(metalRow);
